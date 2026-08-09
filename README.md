@@ -227,6 +227,11 @@ counts, material totals, the stitching gate's pass rate over time (from
 estimates — chars/4, excluding the CLI's own per-call overhead — good for a
 gut feeling, not a bill.
 
+Every successful daily run also snapshots this page to
+`logs/stats/<date>.txt` (`latest.txt` points at the newest; a year is kept).
+Like everything in `logs/`, snapshots are gitignored and never leave the
+laptop.
+
 ## Configuration (environment)
 
 All optional; sensible defaults are baked in.

@@ -1060,6 +1060,19 @@ main() {
     return 1
   fi
   date +%Y-%m-%d > "$STAMP"
+
+  # Daily stats snapshot: one page per day in logs/stats/ (gitignored with the
+  # rest of logs/, never synced to the phone), latest.txt always the newest.
+  # A year of dailies is kept — they're a few hundred bytes each.
+  local statsdir="$LOGS/stats" snap
+  mkdir -p "$statsdir"
+  snap="$statsdir/$(date +%Y-%m-%d).txt"
+  if "$SCRIPT_DIR/stats.sh" > "$snap" 2>/dev/null; then
+    ln -sf "$(basename "$snap")" "$statsdir/latest.txt"
+  else
+    log "WARN stats snapshot failed"
+  fi
+  find "$statsdir" -maxdepth 1 -name '[0-9]*.txt' -mtime +365 -delete 2>/dev/null || true
 }
 
 main "$@"
