@@ -39,6 +39,8 @@
 #   ARCHIVE_DAYS  root notes older than this move to Obsidian/Archive/ (default 14)
 #   VERBATIM_MIN  min % of a candidate's sentences that must be verbatim (default 85)
 #   GLUE_MAX_WORDS  max words for a non-verbatim (glue) sentence (default 12)
+#   NEW_SLACK_EVERY  1 model-written sentence tolerated per this many sentences
+#                 of post (default 25; posts shorter than that allow none)
 #   REJECT_DAYS   how long gate-rejected candidates stay in Posts/Rejected/ (default 30)
 #   REUSE_MIN_WORDS  sentences shorter than this are never claimed (default 6)
 #   REUSE_DROP_PCT   how often a claimed sentence is enforced in a run (default 75);
@@ -95,6 +97,7 @@ HISTORY_LINES="${HISTORY_LINES:-40}"
 ARCHIVE_DAYS="${ARCHIVE_DAYS:-14}"
 VERBATIM_MIN="${VERBATIM_MIN:-85}"
 GLUE_MAX_WORDS="${GLUE_MAX_WORDS:-12}"
+NEW_SLACK_EVERY="${NEW_SLACK_EVERY:-25}"
 REJECT_DAYS="${REJECT_DAYS:-30}"
 REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
 REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
@@ -269,7 +272,8 @@ claude_call() {
 # $1 = body file, $2 = corpus file (with "### NOTE id=" markers). The report
 # goes to stdout; the exit status is the verdict.
 verbatim_gate() {
-  awk -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" '
+  awk -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" \
+      -v new_every="$NEW_SLACK_EVERY" '
     function norm(s) {
       gsub(/[\342\200\230\342\200\231]/, "\x27", s)   # curly apostrophes
       gsub(/[\342\200\234\342\200\235]/, "\"", s)     # curly double quotes
@@ -335,9 +339,14 @@ verbatim_gate() {
       }
       allowed_glue = int(counted * (100 - min_pct) / 100)
       if (allowed_glue < 1) allowed_glue = 1
-      pass = (counted > 0 && new_ == 0 && glue <= allowed_glue)
-      printf "\ngate: %s — %d verbatim, %d tweaked, %d glue (max %d), %d new of %d sentences\n",
-             pass ? "PASS" : "FAIL", verbatim, tweaked, glue, allowed_glue, new_, counted
+      # Proportional mercy for NEW: one model-written sentence tolerated per
+      # new_every sentences of post. Short posts (< new_every sentences) stay
+      # at zero — in 8 sentences, 1 invented one is an eighth of the post; in
+      # 46 it is noise the author will delete on review.
+      allowed_new = int(counted / new_every)
+      pass = (counted > 0 && new_ <= allowed_new && glue <= allowed_glue)
+      printf "\ngate: %s — %d verbatim, %d tweaked, %d glue (max %d), %d new (max %d) of %d sentences\n",
+             pass ? "PASS" : "FAIL", verbatim, tweaked, glue, allowed_glue, new_, allowed_new, counted
       exit pass ? 0 : 1
     }' "$2" "$1"
 }
@@ -495,29 +504,44 @@ archive_notes() {
 }
 
 # --- sentence reuse -----------------------------------------------------------
-# "One sentence, one post" — enforced softly, at the corpus. A sentence that
-# already carries a LIVE post (pool or Keep/) is hidden from the generation
-# corpus REUSE_DROP_PCT% of the time, replaced by a visible […] hole, so the
-# model usually cannot re-stitch it — but an iconic line still resurfaces now
-# and then. Sentences under REUSE_MIN_WORDS words are never claimed ("No!"
-# belongs to every post). Discarded/ and Rejected/ claim nothing: a sentence
-# spent on a post that died returns to circulation.
+# "One sentence, one post" — enforced softly, and PER KIND. A sentence that
+# already carries a LIVE post (pool or Keep/) is claimed for that post's kind
+# only: a sentence spent on a long may still open a short, and vice versa —
+# only same-kind repetition is damped. Each claimed sentence is enforced
+# REUSE_DROP_PCT% of the time (one die per sentence per run, shared by both
+# kinds), so an iconic line still resurfaces now and then. Sentences under
+# REUSE_MIN_WORDS words are never claimed ("No!" belongs to every post).
+# Discarded/ and Rejected/ claim nothing: a sentence spent on a post that died
+# returns to circulation.
+#
+# Enforcement is split because one corpus feeds both kinds in a single call:
+#   - claimed by BOTH kinds -> hidden from the corpus as a […] hole (the model
+#     usually cannot re-stitch it; if it reproduces one from memory, the gate
+#     reads it as NEW and sinks the candidate — no new rule needed there);
+#   - claimed by ONE kind -> left visible (it is legal material for the other
+#     kind), listed in the RESERVED SENTENCES section of the generation stream,
+#     and enforced after the fact by reuse_gate against same-kind candidates.
 #
 # Matching runs on the pre-alias text recorded in the provenance reports (the
 # posts themselves are anonymized, so their text no longer equals the notes').
-# The gate needs no new rule: it compares against this same filtered corpus,
-# so a hidden sentence the model reproduces from memory reads as NEW and sinks
-# the candidate. The norm() here MUST stay identical to verbatim_gate's.
+# The norm() here MUST stay identical to verbatim_gate's.
 
-# Normalized claimed sentences -> $1, one per line.
+# Normalized enforced sentences -> three files, one sentence per line:
+#   <$1>.long    claimed by a live long post and enforced this run
+#   <$1>.short   claimed by a live short post and enforced this run
+#   <$1>.hidden  enforced for both kinds -> becomes a corpus hole
 build_claimed() {
-  local out="$1" pv base
-  : > "$out"
+  local prefix="$1" raw="$1.raw" pv base pool kind
+  : > "$raw"; : > "$prefix.long"; : > "$prefix.short"
   shopt -s nullglob
   for pv in "$PROVENANCE"/*.md; do
     base="$(basename "$pv")"
-    [ -f "$POSTS/$base" ] || [ -f "$POSTS/Keep/$base" ] || continue
-    awk -v min="$REUSE_MIN_WORDS" '
+    if   [ -f "$POSTS/$base" ];      then pool="$POSTS/$base"
+    elif [ -f "$POSTS/Keep/$base" ]; then pool="$POSTS/Keep/$base"
+    else continue; fi
+    kind="$(pool_kind_of "$pool")"
+    case "$kind" in long|short) ;; *) continue ;; esac
+    awk -v min="$REUSE_MIN_WORDS" -v kind="$kind" '
       function norm(s) {
         gsub(/[\342\200\230\342\200\231]/, "\x27", s)
         gsub(/[\342\200\234\342\200\235]/, "\"", s)
@@ -529,21 +553,34 @@ build_claimed() {
         t = $0
         sub(/^- (VERBATIM|TWEAKED)[[:space:]]+\[[^]]*\][[:space:]]*/, "", t)
         t = norm(t)
-        if (split(t, w, " ") >= min) print t
-      }' "$pv" >> "$out"
+        if (split(t, w, " ") >= min) printf "%s\t%s\n", kind, t
+      }' "$pv" >> "$raw"
   done
   shopt -u nullglob
-  sort -u -o "$out" "$out"
+  # One die per sentence, shared across kinds, so a sentence claimed by a long
+  # AND a short comes and goes as one — never half-hidden.
+  awk -F'\t' -v pct="$REUSE_DROP_PCT" -v seed="$((RANDOM * 32768 + RANDOM))" \
+      -v longf="$prefix.long" -v shortf="$prefix.short" '
+    BEGIN { srand(seed) }
+    {
+      if (!($2 in roll)) roll[$2] = (rand() * 100 < pct) ? 1 : 0
+      if (!roll[$2]) next
+      if ($1 == "long") print $2 > longf
+      else              print $2 > shortf
+    }' "$raw"
+  rm -f "$raw"
+  sort -u -o "$prefix.long"  "$prefix.long"
+  sort -u -o "$prefix.short" "$prefix.short"
+  comm -12 "$prefix.long" "$prefix.short" > "$prefix.hidden"
 }
 
-# Emit note $1 with claimed sentences (set in $2) probabilistically replaced
-# by […] — a visible hole, so the model stitches around it instead of
-# bridging it with prose of its own.
+# Emit note $1 with corpus-hidden sentences (set in $2 — the .hidden file, dice
+# already rolled in build_claimed) replaced by […] — a visible hole, so the
+# model stitches around it instead of bridging it with prose of its own.
 filter_claimed() {
   local f="$1" claimed="$2"
   if [ ! -s "$claimed" ]; then cat "$f"; return 0; fi
-  awk -v claimedf="$claimed" -v pct="$REUSE_DROP_PCT" \
-      -v seed="$((RANDOM * 32768 + RANDOM))" '
+  awk -v claimedf="$claimed" '
     function norm(s) {
       gsub(/[\342\200\230\342\200\231]/, "\x27", s)
       gsub(/[\342\200\234\342\200\235]/, "\"", s)
@@ -552,7 +589,6 @@ filter_claimed() {
       return tolower(s)
     }
     BEGIN {
-      srand(seed)
       while ((getline l < claimedf) > 0) claimed[l] = 1
       close(claimedf)
     }
@@ -566,11 +602,51 @@ filter_claimed() {
         c = u
         sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", c)
         c = norm(c)
-        if (c in claimed && rand() * 100 < pct) out = out "[…] "
+        if (c in claimed) out = out "[…] "
         else out = out u
       }
       print out
     }' "$f"
+}
+
+# The kind-scoped half of the rule: candidate body $1 must not contain a
+# sentence enforced for its own kind (list $2). Runs AFTER verbatim_gate, which
+# cannot catch these — a single-kind claim is deliberately left visible in the
+# corpus, so it classifies as VERBATIM. Prints REUSED lines plus a "gate:"
+# verdict line on failure; prints nothing and exits 0 on pass.
+reuse_gate() {
+  local body="$1" enforced="$2" kind="$3"
+  [ -s "$enforced" ] || return 0
+  awk -v listf="$enforced" -v kind="$kind" '
+    function norm(s) {
+      gsub(/[\342\200\230\342\200\231]/, "\x27", s)
+      gsub(/[\342\200\234\342\200\235]/, "\"", s)
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ +/, "", s); sub(/ +$/, "", s)
+      return tolower(s)
+    }
+    BEGIN {
+      while ((getline l < listf) > 0) claimed[l] = 1
+      close(listf)
+    }
+    {
+      line = $0
+      sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", line)
+      body = body " " line
+    }
+    END {
+      gsub(/[.!?][[:space:]]+/, "&\n", body)
+      n = split(body, sents, "\n")
+      for (i = 1; i <= n; i++) {
+        s = norm(sents[i])
+        if (!(s in claimed)) continue
+        hits++
+        d = sents[i]; gsub(/[[:space:]]+/, " ", d); sub(/^ /, "", d)
+        printf "- REUSED   %s\n", d
+      }
+      if (hits) printf "\ngate: FAIL — %d sentence(s) already carrying a live %s post\n", hits, kind
+      exit hits ? 1 : 0
+    }' "$body"
 }
 
 # --- corpus -----------------------------------------------------------------
@@ -607,10 +683,11 @@ build_corpus() {
   local out="$1" f rel mt fsize size=0 total=0 sampled=0 skipped
   : > "$out"
 
-  local claimed="$TMP/claimed.txt"
+  local claimed="$TMP/claimed"
   build_claimed "$claimed"
-  [ ! -s "$claimed" ] \
-    || log "reuse: $(wc -l < "$claimed" | tr -d ' ') sentence(s) claimed by live posts (hidden ${REUSE_DROP_PCT}% of the time)"
+  if [ -s "$claimed.long" ] || [ -s "$claimed.short" ]; then
+    log "reuse: enforced this run (${REUSE_DROP_PCT}% of claims): $(wc -l < "$claimed.long" | tr -d ' ') long, $(wc -l < "$claimed.short" | tr -d ' ') short — $(wc -l < "$claimed.hidden" | tr -d ' ') claimed by both kinds, hidden from the corpus"
+  fi
 
   local listing
   listing="$(corpus_files | sort -rn)"
@@ -649,7 +726,7 @@ build_corpus() {
     rel="${f#"$REPO_DIR"/}"
     {
       printf '\n### NOTE id=%s\n\n' "$rel"
-      filter_claimed "$f" "$claimed"
+      filter_claimed "$f" "$claimed.hidden"
       printf '\n'
     } >> "$out"
   done < <(sort -rn "$selected")
@@ -689,6 +766,26 @@ generate() {
     printf '\n===== BEGIN CORPUS =====\n'
     cat "$tmp/corpus.md"
     printf '\n===== END CORPUS =====\n'
+
+    # Single-kind claims stay visible in the corpus (legal for the other
+    # kind), so the model has to be TOLD what they are reserved for. Both-kind
+    # claims are already […] holes and must not be revealed here.
+    printf '\n===== BEGIN RESERVED SENTENCES =====\n'
+    comm -23 "$tmp/claimed.long" "$tmp/claimed.hidden" > "$tmp/claimed.only_long"
+    comm -23 "$tmp/claimed.short" "$tmp/claimed.hidden" > "$tmp/claimed.only_short"
+    if [ -s "$tmp/claimed.only_long" ] || [ -s "$tmp/claimed.only_short" ]; then
+      if [ -s "$tmp/claimed.only_long" ]; then
+        printf 'Already carrying a live LONG post — do not use in a new long; free for a short:\n'
+        sed 's/^/- /' "$tmp/claimed.only_long"
+      fi
+      if [ -s "$tmp/claimed.only_short" ]; then
+        printf 'Already carrying a live SHORT post — do not use in a new short; free for a long:\n'
+        sed 's/^/- /' "$tmp/claimed.only_short"
+      fi
+    else
+      printf '(none)\n'
+    fi
+    printf '===== END RESERVED SENTENCES =====\n'
 
     printf '\n===== BEGIN POOL =====\n'
     if [ -s "$inventory" ]; then
@@ -798,10 +895,17 @@ write_candidates() {
     # Stitching gate: the model was told to assemble the author's own
     # sentences; this measures whether it did, and rejects the whole candidate
     # if not. The classification is kept as the post's provenance report.
-    if ! verbatim_gate "$c.body" "$tmp/corpus.md" > "$c.prov"; then
+    # Then the reuse gate: no sentence already carrying a live post of the
+    # SAME kind (the other kind's claims don't apply — see build_claimed).
+    local gate_ok=1
+    verbatim_gate "$c.body" "$tmp/corpus.md" > "$c.prov" || gate_ok=0
+    if [ "$gate_ok" -eq 1 ]; then
+      reuse_gate "$c.body" "$tmp/claimed.$kind" "$kind" >> "$c.prov" || gate_ok=0
+    fi
+    if [ "$gate_ok" -eq 0 ]; then
       local gate_line
       gate_line="$(tail -n 1 "$c.prov" | sed 's/^gate: //')"
-      log "WARN candidate rejected by verbatim gate: '$title' — $gate_line"
+      log "WARN candidate rejected by gate: '$title' — $gate_line"
       record_gate REJECTED "$kind" "$title" "$gate_line"
       rejected=$((rejected + 1))
 

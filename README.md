@@ -184,13 +184,18 @@ Guardrails worth knowing:
   each sentence came from, and what little glue was added — the posts'
   equivalent of the drafts' `changes.diff` (laptop-only: it quotes pre-alias
   text, so it is stignored).
-- **A sentence mostly carries one post.** Sentences already stitched into a
-  *live* post (pool or `Keep/`) are hidden from the generation corpus
-  `REUSE_DROP_PCT`% of the time (75), shown as a `[…]` hole the model is told
-  not to bridge — so material rarely repeats across posts, but an iconic line
-  still resurfaces now and then. Sentences under `REUSE_MIN_WORDS` (6) words
-  are never claimed, and posts in `Discarded/`/`Rejected/` claim nothing: a
-  sentence spent on a post that died returns to circulation.
+- **A sentence mostly carries one post — per kind.** Sentences already
+  stitched into a *live* post (pool or `Keep/`) are claimed for that post's
+  kind only: a sentence spent on a long is still fair game for a short, and
+  vice versa — only same-kind repetition is damped. Each claim is enforced
+  `REUSE_DROP_PCT`% of the time (75; one die per sentence per run), so an
+  iconic line still resurfaces now and then. A sentence claimed by *both*
+  kinds is hidden from the corpus as a `[…]` hole the model is told not to
+  bridge; one claimed by a single kind stays visible but is listed as a
+  RESERVED SENTENCE in the prompt, and a candidate that reuses it in a post of
+  the same kind is rejected by the gate. Sentences under `REUSE_MIN_WORDS` (6)
+  words are never claimed, and posts in `Discarded/`/`Rejected/` claim
+  nothing: a sentence spent on a post that died returns to circulation.
 - **Rejections are never silent.** A gate-rejected candidate is kept in
   `Posts/Rejected/` (synced to the phone, aged out after `REJECT_DAYS`) with
   its gate report appended, logged to `logs/gate.tsv`, counted in the desktop
@@ -259,10 +264,13 @@ All optional; sensible defaults are baked in.
 - `VERBATIM_MIN` (85) / `GLUE_MAX_WORDS` (12) — the stitching gate: minimum
   share of verbatim sentences per candidate, and the longest a non-verbatim
   (glue) sentence may be.
+- `NEW_SLACK_EVERY` (25) — proportional mercy: one model-written sentence is
+  tolerated per this many sentences of post, so a single slip can't sink a
+  long post while shorts stay at zero.
 - `REJECT_DAYS` (30) — how long gate-rejected candidates stay in `Posts/Rejected/`.
 - `REUSE_MIN_WORDS` (6) / `REUSE_DROP_PCT` (75) — sentence-reuse damping: shorter
-  sentences are always free; longer ones already in a live post are hidden from
-  a run this often.
+  sentences are always free; longer ones already in a live post are enforced
+  against new posts *of the same kind* this often.
 - `ALIASES` (`private/aliases.tsv`) — real-name → alias-pool map; one alias is
   drawn per person per post.
 
