@@ -7,11 +7,16 @@ Type=oneshot
 WorkingDirectory=__REPO_DIR__
 ExecStart=__REPO_DIR__/bin/suggest.sh
 Nice=10
+# Tells suggest.sh this is a timer slot, not a manual run: a slot skips itself
+# when today's stamp (logs/suggest.lastdone) already exists. Manual runs ignore
+# the stamp and always do the work.
+Environment=SUGGEST_SCHEDULED=1
 # suggest.sh holds its own flock (separate from process.sh's), so an overlapping
 # fire is a harmless no-op, and it can run alongside a transcription batch.
 #
 # No network dependency on purpose: if the network (or Claude) is down, the run
-# logs the failure, leaves the pool exactly as it was, and the next fire retries.
+# exits non-zero without writing the day stamp, and the timer's next retry slot
+# (see blog-suggest.timer) picks it up.
 #
 # Notifications: see the note in blog-pipeline.service and SETUP.md §7.
 

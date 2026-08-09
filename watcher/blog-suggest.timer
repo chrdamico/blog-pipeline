@@ -2,11 +2,14 @@
 Description=blog-suggest: propose new posts once a day
 
 [Timer]
-# Daily, overnight. Deliberately NOT frequent: the pool is capped and meant to
-# be read at a human pace, so churning it several times a day only shuffles
-# suggestions you haven't looked at yet.
-OnCalendar=*-*-* 03:00:00
-# Spread the wake-up a little so it isn't competing with every other 03:00 job.
+# Daily with RETRY SLOTS: the 03:00 slot is the real one; the later slots only
+# matter when an earlier run failed (no network, Claude down) — suggest.sh
+# keeps a per-day success stamp (logs/suggest.lastdone) and exits immediately
+# on a slot whose day already succeeded, so the pool is still churned at most
+# once a day. A run that fails writes no stamp, and the next slot retries; at
+# midnight the day rolls over and the cycle starts fresh.
+OnCalendar=*-*-* 03,07,11,15,19,23:00:00
+# Spread the wake-up a little so it isn't competing with every other on-the-hour job.
 RandomizedDelaySec=30min
 # Catch up on a fire missed while the machine was asleep/off (the common case
 # for a laptop at 03:00) — this is what makes "daily" mean daily.

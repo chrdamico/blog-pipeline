@@ -27,7 +27,8 @@
 #     Moving a file into it on the phone is how you promote it out of the pool.
 #   - eviction is a move to Discarded/, never an rm; age-out is the only deletion
 #   - nothing is ever overwritten; name collisions get -2, -3, ...
-#   - a run with no new material and a full pool does nothing at all
+#   - generation runs every run, even on unchanged notes: reuse holes and the
+#     corpus sample fall differently each day, so new stitchings stay possible
 #
 # Optional environment:
 #   MAX_LONG      long posts kept in the pool        (default 4)
@@ -44,6 +45,8 @@
 #   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv)
 #   CLAUDE_MODEL  model for the curator calls        (default claude-fable-5)
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
+#   SUGGEST_SCHEDULED  set by the timer unit; a slot whose day already
+#                 succeeded (logs/suggest.lastdone) exits immediately
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -64,8 +67,9 @@ PROMPTS="$REPO_DIR/prompts"
 
 SUGGEST_LOG="$LOGS/suggest.log"
 SUGGESTED="$LOGS/suggested.tsv"
-STATE="$LOGS/suggest.state"
 GATE_TSV="$LOGS/gate.tsv"
+USAGE_TSV="$LOGS/usage.tsv"
+STAMP="$LOGS/suggest.lastdone"
 ALIAS_STATE="$LOGS/aliases.last"
 
 SUGGEST_PROMPT="$PROMPTS/suggest.md"
@@ -108,11 +112,6 @@ notify() {
   "$NOTIFY" "$1" "${2:-}" >/dev/null 2>&1 || log "WARN notify failed: $1"
 }
 
-sha256_stdin() {
-  if command -v sha256sum >/dev/null 2>&1; then sha256sum | awk '{print $1}'
-  else shasum -a 256 | awk '{print $1}'; fi
-}
-
 # --- portable primitives (mirroring process.sh) ------------------------------
 file_mtime_epoch() {
   # GNU stat first, then BSD/macOS stat
@@ -122,6 +121,19 @@ file_mtime_epoch() {
 epoch_to_date() {
   # GNU date first, then BSD/macOS date
   date -d "@$1" '+%Y-%m-%d' 2>/dev/null || date -r "$1" '+%Y-%m-%d'
+}
+
+# When the note was CREATED, as best the filesystem knows. Both available
+# clocks overshoot creation in different ways — birth time (GNU stat %W, 0 =
+# unknown; BSD/macOS stat -f %B) is when Syncthing first wrote the LOCAL file,
+# mtime is the last edit (Syncthing preserves the phone's) — so the earlier of
+# the two is the closest estimate. mv preserves both: never the archival date.
+file_created_epoch() {
+  local b m
+  m="$(file_mtime_epoch "$1")"
+  b="$(stat -c %W "$1" 2>/dev/null || stat -f %B "$1" 2>/dev/null || echo 0)"
+  case "$b" in ''|*[!0-9]*) b=0 ;; esac
+  if [ "$b" -gt 0 ] && [ "$b" -lt "$m" ]; then printf '%s' "$b"; else printf '%s' "$m"; fi
 }
 
 # Portable line shuffle (shuf is GNU-only): decorate with rand(), sort, strip.
@@ -223,11 +235,18 @@ pool_kind_of() {
 # work/ with FS/exec tools denied, so the call can only read stdin and write
 # stdout. $1 = stream file, $2 = output file.
 claude_call() {
+  local rc=0
   ( cd "$WORK" && "$CLAUDE_BIN" -p \
       --model "$CLAUDE_MODEL" \
       --output-format text \
       --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" \
-  ) < "$1" > "$2"
+  ) < "$1" > "$2" || rc=$?
+  # Usage ledger (see bin/stats.sh): stream sizes in chars — ~4 chars/token is
+  # close enough for a gut feeling, which is all this is for.
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" suggest "$CLAUDE_MODEL" \
+    "$(wc -c < "$1" | tr -d ' ')" "$(wc -c < "$2" | tr -d ' ')" >> "$USAGE_TSV"
+  return $rc
 }
 
 # --- verbatim gate ------------------------------------------------------------
@@ -429,7 +448,8 @@ replace_in_file() {
 
 # --- archive ------------------------------------------------------------------
 # Root notes older than ARCHIVE_DAYS move to Obsidian/Archive/<date>-<slug>,
-# the date from the file's mtime and the slug from its first line — the phone's
+# the date from when the note was created (file_created_epoch — never the
+# archival date) and the slug from its first line — the phone's
 # note apps name files arbitrarily ("Lorem ipsum dolor sit.txt"), and archiving
 # is where a note gets its real, dated title. Names that already lead with a
 # date are kept as-is. Every rename is propagated into the `sources:` lines of
@@ -445,7 +465,7 @@ archive_notes() {
       [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*)
         dest="$(dedup_file "$ARCHIVE/${base%.*}" "$ext")" ;;
       *)
-        date="$(epoch_to_date "$(file_mtime_epoch "$f")")"
+        date="$(epoch_to_date "$(file_created_epoch "$f")")"
         first="$(head -n 1 "$f" | sed 's/^#\+[[:space:]]*//')"
         slug="$(printf '%s' "$first" | slugify)"
         [ -n "$slug" ] || slug="note"
@@ -554,9 +574,9 @@ filter_claimed() {
 # When the material exceeds CORPUS_MAX, the newest notes get ~70% of the budget
 # and the remainder is filled with a RANDOM SAMPLE of the older ones — old
 # material keeps a chance to converge with new instead of aging out of the
-# corpus entirely. Sampling makes the corpus non-deterministic, which is why
-# the no-new-material check in main() fingerprints the material list
-# (corpus_files) rather than the corpus text.
+# corpus entirely. Together with the reuse holes (filter_claimed) this makes
+# the corpus a different lens every run, which is why generation runs even on
+# unchanged notes.
 #
 # Posts/ lives *inside* the vault but is excluded by the non-recursive globs:
 # the generator must never read its own output back in as source material.
@@ -953,6 +973,16 @@ cleanup() {
 main() {
   acquire_lock
 
+  # Retry-slot guard: the timer fires several slots a day so a 03:00 failure
+  # (laptop off, no network) gets retried, but only the first SUCCESS of a
+  # calendar day does work — later slots are no-ops. A failed run writes no
+  # stamp, so the next slot picks it up. Manual runs ignore the stamp.
+  if [ "${SUGGEST_SCHEDULED:-0}" = 1 ] && [ -f "$STAMP" ] \
+     && [ "$(cat "$STAMP")" = "$(date +%Y-%m-%d)" ]; then
+    log "already completed today — retry slot skipped"
+    return 0
+  fi
+
   # A crashed run (SIGKILL, power loss) never fires the EXIT trap; sweep any
   # scratch dir old enough that it can't belong to a live run.
   find "$WORK" -maxdepth 1 \( -name 'sugg.*' -o -name '.repl.*' \) -mmin +1440 \
@@ -978,26 +1008,18 @@ main() {
 
   log "corpus: $NOTE_COUNT notes; pool: ${n_long}/${MAX_LONG} long, ${n_short}/${MAX_SHORT} short"
 
-  # Generation and curation are decided separately, on purpose. Identical
-  # material would only produce churn in a pool that hasn't been read yet, so
-  # generation is skipped — but curation still runs, because a pool can be over
-  # cap for reasons that have nothing to do with new notes (a lowered cap, a
-  # file dropped into Posts/ by hand). Curation under the cap costs no call, so
-  # "skip generation, always curate" makes an idle run a genuine no-op.
-  # Fingerprint the material (paths + mtimes), not the corpus text: the corpus
-  # is randomly sampled when over budget, so its bytes differ between runs even
-  # when nothing changed.
-  local hash prev="" out counts written=0 rejected=0
-  hash="$(corpus_files | sort | sha256_stdin)"
-  [ -f "$STATE" ] && prev="$(cat "$STATE")"
-
-  if [ "$hash" = "$prev" ]; then
-    log "no new material since last run — skipping generation"
-  elif out="$(generate "$tmp" "$inventory")"; then
+  # Generation runs EVERY run, even with no new notes — deliberately. The
+  # corpus is a different lens each day (reuse holes fall differently, the
+  # over-budget sample rotates), so identical notes can still yield a stitching
+  # yesterday's run couldn't see; the pool cap, HISTORY and the curator absorb
+  # any churn. One Claude call a day is the price of serendipity.
+  local out counts written=0 rejected=0 gen_failed=0
+  if out="$(generate "$tmp" "$inventory")"; then
     counts="$(write_candidates "$tmp" "$out")"
     written="${counts%% *}"
     rejected="${counts##* }"
   else
+    gen_failed=1
     log "WARN generation failed; curating the existing pool anyway"
   fi
 
@@ -1020,8 +1042,6 @@ main() {
   done
   shopt -u nullglob
 
-  printf '%s\n' "$hash" > "$STATE"
-
   log "run done: $written new suggestion(s), $rejected gate-rejected"
   if [ "$written" -gt 0 ]; then
     notify "$written new post suggestion(s)" "in sync/Obsidian/Posts/"
@@ -1031,6 +1051,15 @@ main() {
   if [ "$rejected" -gt 0 ]; then
     notify "$rejected candidate(s) rejected by the stitching gate" "kept in Posts/Rejected/ for $REJECT_DAYS days"
   fi
+
+  # The day stamp is written only when generation actually went through; a
+  # transport failure exits non-zero, stamps nothing, and the timer's next
+  # retry slot tries again — until midnight rolls the day over.
+  if [ "$gen_failed" -eq 1 ]; then
+    log "run incomplete: generation failed — next timer slot will retry"
+    return 1
+  fi
+  date +%Y-%m-%d > "$STAMP"
 }
 
 main "$@"

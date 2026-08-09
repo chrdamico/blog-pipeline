@@ -128,7 +128,8 @@ so the editor on either end is swappable. See `SETUP.md` §4 for the phone side.
 
 Phone note apps name files whatever they like ("Lorem ipsum dolor sit.txt");
 that's fine. Once a root note is older than `ARCHIVE_DAYS` (14), the daily job
-moves it to `Obsidian/Archive/<date>-<slug>.<ext>` — date from the file's mtime,
+moves it to `Obsidian/Archive/<date>-<slug>.<ext>` — date from when the note was
+*created* (the earlier of file birth time and mtime, never the archival date),
 slug from its first line — so the archive is dated and titled even when the
 capture wasn't. Renames are propagated into the `sources:` of every pool and
 `Keep/` post, archived notes stay part of the corpus, and `note.sh -l` / `-e`
@@ -136,7 +137,12 @@ see the archive too. Content is never touched, only the name.
 
 ## Post suggestions (`sync/Obsidian/Posts/`)
 
-`bin/suggest.sh` runs daily. It reads the whole corpus — every `drafts/*/cleaned.md`
+`bin/suggest.sh` runs daily — scheduled at 03:00, with catch-up after a night
+the laptop was off (`Persistent=true`) and retry slots every 4 hours: only the
+first *successful* run of a day does work (per-day stamp in
+`logs/suggest.lastdone`), and a run whose Claude call failed writes no stamp,
+so the next slot retries until midnight rolls the day over. Manual runs ignore
+the stamp. It reads the whole corpus — every `drafts/*/cleaned.md`
 plus every note in the vault (root and `Archive/`) — and looks for places where
 **two or more notes converge**. A candidate is **stitched, not written**: the
 model may select, reorder and drop your sentences, but not write its own — short
@@ -208,7 +214,18 @@ Guardrails worth knowing:
   never read its own output back in as source material.
 - If the curator's answer doesn't validate (wrong count, unknown id), the script
   falls back to keeping the newest N. The cap is honoured either way.
-- A run with no new notes since last time makes **no** Claude call at all.
+- Generation runs every run, even with no new notes — the corpus is a different
+  lens each day (reuse holes fall differently, the over-budget sample rotates),
+  so unchanged notes can still yield a stitching yesterday couldn't see.
+
+## Statistics
+
+`bin/stats.sh` prints the pipeline at a glance: pool/Keep/Discarded/Rejected
+counts, material totals, the stitching gate's pass rate over time (from
+`logs/gate.tsv`, one row per candidate), and rough Claude usage (from
+`logs/usage.tsv`, one row per call with stream sizes). Token figures are
+estimates — chars/4, excluding the CLI's own per-call overhead — good for a
+gut feeling, not a bill.
 
 ## Configuration (environment)
 

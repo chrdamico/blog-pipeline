@@ -172,7 +172,7 @@ dedup_dest() {
 # repo — it only reads stdin and writes stdout. Used for both the voice-
 # preserving cleanup and the optional structure suggestion.
 claude_transform() {
-  local prompt_file="$1" in_file="$2" out_file="$3"
+  local prompt_file="$1" in_file="$2" out_file="$3" rc=0
   # Feed the instructions AND the input as ONE stdin stream, delimited by
   # explicit markers, with no prompt argument. Passing the prompt as -p and the
   # text on stdin is ambiguous: claude sometimes ignores the piped input and
@@ -190,7 +190,17 @@ claude_transform() {
         --model "$CLAUDE_MODEL" \
         --output-format text \
         --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" ) \
-      > "$out_file"
+      > "$out_file" || rc=$?
+  # Usage ledger (see bin/stats.sh): stream size in chars, reconstructed from
+  # the parts (prompt + anchor + input; the markers are noise). ~4 chars/token.
+  local in_chars
+  in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
+  [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
+  printf '%s\t%s\t%s\t%s\t%s\n' \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "process:$(basename "$prompt_file" .md)" \
+    "$CLAUDE_MODEL" "$in_chars" "$(wc -c < "$out_file" | tr -d ' ')" \
+    >> "$LOGS/usage.tsv"
+  return $rc
 }
 
 # --- process one audio file (returns non-zero on failure) -------------------

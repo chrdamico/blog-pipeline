@@ -7,11 +7,15 @@
   "copy the folder, run install.sh, done". install.sh substitutes __REPO_DIR__
   and loads this into ~/Library/LaunchAgents/. Do not load this template copy.
 
-  Runs suggest.sh once a day at 03:00 (StartCalendarInterval), the launchd
-  equivalent of blog-suggest.timer. No WatchPaths: unlike process.sh this job is
-  deliberately NOT event-driven — the pool is capped and read at a human pace.
-  launchd runs a missed calendar job as soon as the machine wakes, which is the
-  same catch-up behaviour as the timer's Persistent=true.
+  Runs suggest.sh at 03:00 plus RETRY SLOTS every 4 hours (StartCalendarInterval
+  array), the launchd mirror of blog-suggest.timer: only the first successful
+  run of a day does work — suggest.sh keeps a per-day stamp and, because
+  SUGGEST_SCHEDULED=1 is set here, exits immediately on a slot whose day
+  already succeeded. A failed run (no network) writes no stamp, so the next
+  slot retries. No WatchPaths: unlike process.sh this job is deliberately NOT
+  event-driven — the pool is capped and read at a human pace. launchd runs a
+  missed calendar job as soon as the machine wakes, which is the same catch-up
+  behaviour as the timer's Persistent=true.
 -->
 <plist version="1.0">
 <dict>
@@ -23,13 +27,21 @@
         <string>__REPO_DIR__/bin/suggest.sh</string>
     </array>
 
-    <key>StartCalendarInterval</key>
+    <key>EnvironmentVariables</key>
     <dict>
-        <key>Hour</key>
-        <integer>3</integer>
-        <key>Minute</key>
-        <integer>0</integer>
+        <key>SUGGEST_SCHEDULED</key>
+        <string>1</string>
     </dict>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>23</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
 
     <key>ProcessType</key>
     <string>Background</string>
