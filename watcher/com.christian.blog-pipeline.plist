@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for the macOS migration (M3/M4 Mac).
+
+  UNTESTED on the current Linux machine — written now so migrating is just
+  "copy the folder, run install.sh, done". install.sh substitutes __REPO_DIR__
+  and loads this into ~/Library/LaunchAgents/. Do not load this template copy.
+
+  Runs process.sh both on an interval (StartInterval, 900s = 15 min) and
+  whenever sync/ changes (WatchPaths), mirroring the Linux timer behaviour.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.christian.blog-pipeline</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_DIR__/bin/process.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>__REPO_DIR__/sync</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/logs/launchd.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/logs/launchd.err.log</string>
+</dict>
+</plist>

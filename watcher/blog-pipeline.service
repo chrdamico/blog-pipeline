@@ -1,0 +1,21 @@
+[Unit]
+Description=blog-pipeline: transcribe & voice-preservingly clean new voice memos
+Documentation=file://__REPO_DIR__/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+ExecStart=__REPO_DIR__/bin/process.sh
+Nice=10
+# process.sh holds its own flock, so an overlapping timer fire is a harmless no-op.
+#
+# Notifications: notify-send needs the session bus. Most desktops import it into
+# the user manager automatically; if a draft is created but no notification
+# appears, add DBUS_SESSION_BUS_ADDRESS/DISPLAY to the user-manager environment
+# (see SETUP.md → "Notifications from the timer").
+#
+# No network dependency on purpose: if the network (or Claude) is down, cleanup
+# fails, the audio is left in sync/, and the next timer fire retries it.
+
+# __REPO_DIR__ is substituted by install.sh when this unit is copied into
+# ~/.config/systemd/user/. Do not run this template copy directly.

@@ -1,0 +1,17 @@
+[Unit]
+Description=blog-suggest: propose new posts once a day
+
+[Timer]
+# Daily, overnight. Deliberately NOT frequent: the pool is capped and meant to
+# be read at a human pace, so churning it several times a day only shuffles
+# suggestions you haven't looked at yet.
+OnCalendar=*-*-* 03:00:00
+# Spread the wake-up a little so it isn't competing with every other 03:00 job.
+RandomizedDelaySec=30min
+# Catch up on a fire missed while the machine was asleep/off (the common case
+# for a laptop at 03:00) — this is what makes "daily" mean daily.
+Persistent=true
+Unit=blog-suggest.service
+
+[Install]
+WantedBy=timers.target

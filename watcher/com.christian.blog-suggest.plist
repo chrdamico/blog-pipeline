@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd LaunchAgent for the macOS migration (M3/M4 Mac).
+
+  UNTESTED on the current Linux machine — written now so migrating is just
+  "copy the folder, run install.sh, done". install.sh substitutes __REPO_DIR__
+  and loads this into ~/Library/LaunchAgents/. Do not load this template copy.
+
+  Runs suggest.sh once a day at 03:00 (StartCalendarInterval), the launchd
+  equivalent of blog-suggest.timer. No WatchPaths: unlike process.sh this job is
+  deliberately NOT event-driven — the pool is capped and read at a human pace.
+  launchd runs a missed calendar job as soon as the machine wakes, which is the
+  same catch-up behaviour as the timer's Persistent=true.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.christian.blog-suggest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_DIR__/bin/suggest.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/logs/launchd-suggest.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/logs/launchd-suggest.err.log</string>
+</dict>
+</plist>

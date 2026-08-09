@@ -1,0 +1,19 @@
+[Unit]
+Description=blog-suggest: stitch notes into capped post suggestions
+Documentation=file://__REPO_DIR__/README.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+ExecStart=__REPO_DIR__/bin/suggest.sh
+Nice=10
+# suggest.sh holds its own flock (separate from process.sh's), so an overlapping
+# fire is a harmless no-op, and it can run alongside a transcription batch.
+#
+# No network dependency on purpose: if the network (or Claude) is down, the run
+# logs the failure, leaves the pool exactly as it was, and the next fire retries.
+#
+# Notifications: see the note in blog-pipeline.service and SETUP.md §7.
+
+# __REPO_DIR__ is substituted by install.sh when this unit is copied into
+# ~/.config/systemd/user/. Do not run this template copy directly.

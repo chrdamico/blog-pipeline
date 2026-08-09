@@ -1,0 +1,14 @@
+[Unit]
+Description=blog-pipeline: poll sync/ for new voice memos every 15 minutes
+
+[Timer]
+# Fire shortly after login/boot, then every 15 minutes.
+OnBootSec=2min
+OnStartupSec=2min
+OnUnitActiveSec=15min
+# Catch up on a fire that was missed while the machine was asleep/off.
+Persistent=true
+Unit=blog-pipeline.service
+
+[Install]
+WantedBy=timers.target
