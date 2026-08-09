@@ -519,8 +519,10 @@ archive_notes() {
 #     usually cannot re-stitch it; if it reproduces one from memory, the gate
 #     reads it as NEW and sinks the candidate — no new rule needed there);
 #   - claimed by ONE kind -> left visible (it is legal material for the other
-#     kind), listed in the RESERVED SENTENCES section of the generation stream,
-#     and enforced after the fact by reuse_gate against same-kind candidates.
+#     kind), listed in the RESERVED SENTENCES section of the generation stream
+#     (trimmed to sentences present in this run's corpus — see
+#     filter_to_corpus), and enforced after the fact by reuse_gate against
+#     same-kind candidates.
 #
 # Matching runs on the pre-alias text recorded in the provenance reports (the
 # posts themselves are anonymized, so their text no longer equals the notes').
@@ -607,6 +609,32 @@ filter_claimed() {
       }
       print out
     }' "$f"
+}
+
+# Keep only the sentences (one per line, already norm()ed by build_claimed)
+# that actually appear in this run's corpus, $2. A claim whose source notes
+# were not sampled this run cannot be stitched verbatim anyway, so listing it
+# in the generation stream is pure token waste — and Keep/ only ever grows, so
+# without this trim the RESERVED SENTENCES section grows without bound while
+# everything else in the stream is budgeted. Prompt-only: reuse_gate still
+# enforces the FULL claim lists afterwards.
+filter_to_corpus() {
+  local list="$1" corpus="$2"
+  [ -s "$list" ] || return 0
+  awk -v listf="$list" '
+    function norm(s) {
+      gsub(/[\342\200\230\342\200\231]/, "\x27", s)
+      gsub(/[\342\200\234\342\200\235]/, "\"", s)
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ +/, "", s); sub(/ +$/, "", s)
+      return tolower(s)
+    }
+    { text = text " " $0 }
+    END {
+      text = norm(text)
+      while ((getline l < listf) > 0) if (index(text, l)) print l
+      close(listf)
+    }' "$corpus"
 }
 
 # The kind-scoped half of the rule: candidate body $1 must not contain a
@@ -756,7 +784,7 @@ pool_inventory() {
 # --- generate ---------------------------------------------------------------
 generate() {
   local tmp="$1" inventory="$2"
-  local stream="$tmp/gen.in" out="$tmp/gen.out"
+  local stream="$tmp/gen.in" out="$tmp/gen.out" n_res_all n_res
 
   {
     cat "$SUGGEST_PROMPT"
@@ -769,10 +797,17 @@ generate() {
 
     # Single-kind claims stay visible in the corpus (legal for the other
     # kind), so the model has to be TOLD what they are reserved for. Both-kind
-    # claims are already […] holes and must not be revealed here.
+    # claims are already […] holes and must not be revealed here. Trimmed to
+    # sentences present in this run's corpus: only those can be stitched.
     printf '\n===== BEGIN RESERVED SENTENCES =====\n'
-    comm -23 "$tmp/claimed.long" "$tmp/claimed.hidden" > "$tmp/claimed.only_long"
-    comm -23 "$tmp/claimed.short" "$tmp/claimed.hidden" > "$tmp/claimed.only_short"
+    comm -23 "$tmp/claimed.long" "$tmp/claimed.hidden" > "$tmp/claimed.only_long.all"
+    comm -23 "$tmp/claimed.short" "$tmp/claimed.hidden" > "$tmp/claimed.only_short.all"
+    filter_to_corpus "$tmp/claimed.only_long.all"  "$tmp/corpus.md" > "$tmp/claimed.only_long"
+    filter_to_corpus "$tmp/claimed.only_short.all" "$tmp/corpus.md" > "$tmp/claimed.only_short"
+    n_res_all="$(cat "$tmp/claimed.only_long.all" "$tmp/claimed.only_short.all" | wc -l | tr -d ' ')"
+    n_res="$(cat "$tmp/claimed.only_long" "$tmp/claimed.only_short" | wc -l | tr -d ' ')"
+    [ "$n_res" -eq "$n_res_all" ] \
+      || log "reserved: $((n_res_all - n_res)) claim(s) whose sentences are not in this corpus — left out of the stream"
     if [ -s "$tmp/claimed.only_long" ] || [ -s "$tmp/claimed.only_short" ]; then
       if [ -s "$tmp/claimed.only_long" ]; then
         printf 'Already carrying a live LONG post — do not use in a new long; free for a short:\n'
