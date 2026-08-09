@@ -462,6 +462,33 @@ replace_in_file() {
     }' "$3" > "$tmpf" && mv "$tmpf" "$3" || rm -f "$tmpf"
 }
 
+# --- txt normalization --------------------------------------------------------
+# Some note apps (and hand-copies) write .txt; the corpus accepts it, but
+# Obsidian refuses to open it. Rename to .md on sight — markdown IS plain
+# text — propagating the new path into every live reference so no `sources:`
+# line dangles, exactly like archive_notes does for its renames. mv preserves
+# mtime and inode, so corpus ordering and archive dating are unaffected.
+normalize_txt_notes() {
+  local f dest old_rel new_rel p renamed=0
+  shopt -s nullglob
+  for f in "$VAULT"/*.txt "$ARCHIVE"/*.txt; do
+    dest="$(dedup_file "${f%.txt}" md)"
+    old_rel="${f#"$REPO_DIR"/}"
+    new_rel="${dest#"$REPO_DIR"/}"
+    mv "$f" "$dest"
+    renamed=$((renamed + 1))
+    log "TXT->MD $old_rel -> $new_rel"
+    for p in "$POSTS"/*.md "$POSTS"/Keep/*.md "$POSTS"/Discarded/*.md \
+             "$POSTS"/Rejected/*.md "$PROVENANCE"/*.md; do
+      [ -f "$p" ] || continue
+      grep -qF "$old_rel" "$p" || continue
+      replace_in_file "$old_rel" "$new_rel" "$p"
+      log "TXT->MD updated source ref in $(basename "$p")"
+    done
+  done
+  shopt -u nullglob
+}
+
 # --- archive ------------------------------------------------------------------
 # Root notes older than ARCHIVE_DAYS move to Obsidian/Archive/<date>-<slug>,
 # the date from when the note was created (file_created_epoch — never the
@@ -1138,6 +1165,7 @@ main() {
   trap cleanup EXIT
   local tmp="$TMP"
 
+  normalize_txt_notes
   archive_notes
 
   build_corpus "$tmp/corpus.md"
