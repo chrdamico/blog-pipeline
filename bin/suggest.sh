@@ -41,7 +41,8 @@
 #   GLUE_MAX_WORDS  max words for a non-verbatim (glue) sentence (default 12)
 #   REJECT_DAYS   how long gate-rejected candidates stay in Posts/Rejected/ (default 30)
 #   REUSE_MIN_WORDS  sentences shorter than this are never claimed (default 6)
-#   REUSE_DROP_PCT   how often a claimed sentence is hidden from a run (default 75)
+#   REUSE_DROP_PCT   how often a claimed sentence is enforced in a run (default 75);
+#                 claims are kind-scoped — a long's sentence is free for a short
 #   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv)
 #   CLAUDE_MODEL  model for the curator calls        (default claude-fable-5)
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
@@ -302,10 +303,16 @@ verbatim_gate() {
       next
     }
     FNR == 1 { for (i = 1; i <= nids; i++) ntext[ids[i]] = norm(raw[ids[i]]) }
-    {         # second file: the candidate body, markdown decorations stripped
+    {         # second file: the candidate body, markdown decorations stripped.
+      # Lines are joined with \n, NOT a space: a line break is a sentence
+      # boundary too, or an unpunctuated line ending (the author writes those)
+      # fuses with the next sentence into a phantom "sentence" that exists
+      # nowhere in the corpus and falsely reads as NEW. A real sentence
+      # wrapped across lines just splits into fragments, and a fragment of a
+      # verbatim sentence still matches as a substring.
       line = $0
       sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", line)
-      body = body " " line
+      body = body "\n" line
     }
     END {
       gsub(/[.!?][[:space:]]+/, "&\n", body)
