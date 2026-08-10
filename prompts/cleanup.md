@@ -16,7 +16,7 @@ DO NOT:
 - Smooth transitions or add connective tissue between sentences.
 - Translate: keep German words, English words, and Denglisch exactly where they appear — inside a repaired sentence too.
 - Summarize, shorten (beyond removing filler), or expand — no added facts, examples, or emphasis.
-- Add any commentary, headers, or notes of your own.
+- Add any commentary, headers, or notes of your own — no lead-in ("Here is the cleaned transcript:") and no report of what you changed. The first line of your output is the first line of the transcript.
 
 CONFIDENCE MARKS: the transcript may contain spans wrapped in ⟦unsure⟧ … ⟦/unsure⟧ — places where the speech-to-text model itself was unsure. The words inside are its best guess and may be misheard: read each marked span against its context, and if the intended words are clear, fix them. If a marked span stays unintelligible, keep the guess and mark it [unclear: best-guess]. Outside these marks, assume the transcription is right and be correspondingly reluctant to "fix" odd wording — odd but confidently-heard words are the author's voice. NEVER copy the ⟦unsure⟧ / ⟦/unsure⟧ marks into your output.
 

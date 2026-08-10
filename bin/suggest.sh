@@ -355,7 +355,7 @@ verbatim_gate() {
 # Script-driven, never model-driven — and randomized PER POST: aliases.tsv
 # (gitignored) maps each real name to a POOL of fictional ones,
 #
-#   Milo<TAB>Ben, Jonas, Karim
+#   Timo<TAB>Ben, Jonas, Karim
 #   Martin Kowalski<TAB>the hardware guy, the connector whisperer
 #
 # and every candidate draws its own alias from the pool, so the same person
@@ -363,7 +363,10 @@ verbatim_gate() {
 # up. Within a post the draw is consistent (one alias per person) and two
 # people never share an alias; across posts it avoids repeating the previous
 # post's pick (logs/aliases.last). Names are matched as exact substrings — use
-# full names to avoid collisions inside other words. Applied to title and body
+# full names to avoid collisions inside other words. Rows with an IDENTICAL
+# pool are one person under variant spellings (Lea/Leah — whisper drifts on
+# names): they share a single draw per post, so the variants never split
+# into two fictional people. Distinct people need distinct pools. Applied to title and body
 # after the verbatim gate (the gate must compare against the corpus as
 # written) and before anything lands in the synced pool. The corpus, drafts
 # and notes keep the real names: they are private memory, and the aliases
@@ -387,6 +390,9 @@ make_alias_map() {
     }
     NF >= 2 && $1 != "" {
       real = $1
+      # variant spellings of one person carry an identical pool: reuse the
+      # draw already made for it, so the variants stay one fictional person
+      if ($2 in poolpick) { printf "%s\t%s\n", real, poolpick[$2]; next }
       m = split($2, pool, ",")
       # prefer an alias that is neither last post_s pick nor taken in this post;
       # relax step by step rather than ever leaking the real name
@@ -397,6 +403,7 @@ make_alias_map() {
       if (k == 0) next
       choice = cand[int(rand() * k) + 1]
       used[choice] = 1
+      poolpick[$2] = choice
       printf "%s\t%s\n", real, choice
     }' "$ALIASES" > "$out"
 
