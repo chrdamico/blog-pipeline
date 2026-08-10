@@ -12,6 +12,13 @@ At the end of this message you receive, between explicit markers:
   unavailable this run — usually because it already carries an existing post.
   Never reconstruct, paraphrase, or bridge a hole: stitch around it, and do not
   assume the sentences on either side of one were consecutive thoughts.
+- `BEGIN RESERVED SENTENCES` / `END RESERVED SENTENCES` — sentences that
+  already carry a live post of one kind. They are still in the corpus, and you
+  may use them — but only in a post of the **other** kind, as the section
+  states. A candidate that reuses a reserved sentence in a post of the same
+  kind is rejected whole, like a verbatim failure. (The lines here are
+  lowercased for matching; in the post, copy the sentence as it appears in its
+  note.)
 - `BEGIN POOL` / `END POOL` — suggestions that already exist and are still
   waiting to be read. Do not propose these again in a different wrapper.
 - `BEGIN HISTORY` / `END HISTORY` — note combinations already turned into posts.

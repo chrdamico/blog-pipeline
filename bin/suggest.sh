@@ -46,7 +46,7 @@
 #   REUSE_DROP_PCT   how often a claimed sentence is enforced in a run (default 75);
 #                 claims are kind-scoped — a long's sentence is free for a short
 #   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv)
-#   CLAUDE_MODEL  model for the curator calls        (default claude-fable-5)
+#   CLAUDE_MODEL  model for the curator calls        (default claude-opus-5)
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
 #   SUGGEST_SCHEDULED  set by the timer unit; a slot whose day already
 #                 succeeded (logs/suggest.lastdone) exits immediately
@@ -82,9 +82,9 @@ ANCHOR="$PROMPTS/style-anchor.md"
 # --- swappable commands -----------------------------------------------------
 CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # Curation is the judgment-heavy step — reading the whole corpus, deciding what
-# is post-worthy, and writing in the author's voice — so it gets Fable. The
+# is post-worthy, and writing in the author's voice — so it gets Opus. The
 # mechanical cleanup in process.sh runs on Sonnet.
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-fable-5}"
+CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-5}"
 NOTIFY="${NOTIFY:-$SCRIPT_DIR/notify.sh}"
 
 # --- knobs ------------------------------------------------------------------
