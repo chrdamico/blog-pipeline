@@ -45,7 +45,9 @@
 #   REUSE_MIN_WORDS  sentences shorter than this are never claimed (default 6)
 #   REUSE_DROP_PCT   how often a claimed sentence is enforced in a run (default 75);
 #                 claims are kind-scoped — a long's sentence is free for a short
-#   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv)
+#   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv);
+#                 auto-extended by the name scout (NAME_SCAN=0 disables it,
+#                 SELF_NAME names the author, who is never aliased)
 #   CLAUDE_MODEL  model for the curator calls        (default claude-opus-5)
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
 #   SUGGEST_SCHEDULED  set by the timer unit; a slot whose day already
@@ -77,6 +79,7 @@ ALIAS_STATE="$LOGS/aliases.last"
 
 SUGGEST_PROMPT="$PROMPTS/suggest.md"
 CURATE_PROMPT="$PROMPTS/curate.md"
+NAMES_PROMPT="$PROMPTS/names.md"
 ANCHOR="$PROMPTS/style-anchor.md"
 
 # --- swappable commands -----------------------------------------------------
@@ -102,8 +105,23 @@ REJECT_DAYS="${REJECT_DAYS:-30}"
 REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
 REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
 # Anonymization map: real name -> comma-separated alias pool, drawn per post
-# (see make_alias_map below). Gitignored; absent = no-op.
+# (see make_alias_map below). Gitignored; absent = no-op for the map, but the
+# name scout (extend_aliases) creates and extends it on its own.
 ALIASES="${ALIASES:-$REPO_DIR/private/aliases.tsv}"
+# Name scout: one model call per run lists the person names in the candidates;
+# the script auto-extends ALIASES for any it does not know yet, so people who
+# enter the notes AFTER the map was written still get anonymized. A failed or
+# unusable scan withholds ALL candidates this run (fail closed). NAME_SCAN=0
+# disables the whole step. SELF_NAME is the author and is never aliased.
+NAME_SCAN="${NAME_SCAN:-1}"
+SELF_NAME="${SELF_NAME:-Christian}"
+# Reserve alias pools for auto-added names, by gender read from context (the
+# text keeps its pronouns, so the alias should not fight them; x fits either).
+# Collisions with the live map, the corpus, or the candidates are skipped at
+# pick time, so overlap here is harmless.
+RESERVE_F="Judith Helena Ronja Merle Frida Carla Teresa Bianca Sofia Irene Livia Paola Zoe Selin Aylin Esra Noemi Linnea Greta Elif Sanne Rosa Alma Leonie Tilda Edith Runa Amara"
+RESERVE_M="Anton Bruno Dario Fabio Georg Henrik Ivo Kilian Lorenz Matteo Nils Oskar Pavel Quentin Ruben Stefan Tobias Umberto Wim Yannick Aldo Boris Cem Darius Enzo Farid"
+RESERVE_X="Kim Luca Toni Micha Rowan Sage Noor Eli"
 
 mkdir -p "$POSTS" "$POSTS/Keep" "$TRASH" "$REJECTED" "$ARCHIVE" "$PROVENANCE" "$WORK" "$LOGS"
 
@@ -443,6 +461,107 @@ apply_aliases() {
       }
       print line
     }' "$map" -
+}
+
+# --- name scout ---------------------------------------------------------------
+# "ALL names, forever": aliases.tsv covers whoever was known when it was last
+# edited, but new people keep entering the notes. Before any candidate is
+# written, one model call (prompts/names.md) lists every person name in the
+# generation output; the SCRIPT then extends aliases.tsv with a reserve pool
+# for each name it does not already know — detection is model-assisted, the
+# replacement stays script-driven, and make_alias_map picks the new rows up in
+# the same run. Spelling variants arrive on one line (f: Lea|Leah) and share
+# one pool; a variant of an already-known name inherits that name's pool. If
+# the call fails or answers garbage, ALL candidates are withheld this run:
+# synced text is never written without a completed name pass.
+
+# Up to $2 unused reserve aliases for gender $1, one per line. $3/$4 are the
+# candidate and corpus files — an alias visible in either would collide with
+# a real person, so it is skipped, as is anything in the live map.
+pick_reserve() {
+  local g="$1" want="$2" cand="$3" corpus="$4" a picked=0 list
+  case "$g" in
+    f) list="$RESERVE_F $RESERVE_X" ;;
+    m) list="$RESERVE_M $RESERVE_X" ;;
+    *) list="$RESERVE_X $RESERVE_F $RESERVE_M" ;;
+  esac
+  for a in $list; do
+    [ -f "$ALIASES" ] && grep -qwF "$a" "$ALIASES" && continue
+    [ -f "$corpus" ] && grep -qwF "$a" "$corpus" && continue
+    grep -qwF "$a" "$cand" && continue
+    printf '%s\n' "$a"
+    picked=$((picked + 1))
+    [ "$picked" -ge "$want" ] && return 0
+  done
+  [ "$picked" -ge 1 ]
+}
+
+# Scan the generation output ($2) for person names and extend ALIASES with any
+# new ones. 0 = safe to write candidates; 1 = withhold them all (fail closed).
+extend_aliases() {
+  local tmp="$1" cand="$2"
+  [ "$NAME_SCAN" = 1 ] || return 0
+  local stream="$tmp/names.in" resp="$tmp/names.out"
+  {
+    cat "$NAMES_PROMPT"
+    printf '\n===== BEGIN POSTS =====\n'
+    cat "$cand"
+    printf '\n===== END POSTS =====\n'
+  } > "$stream"
+  if ! claude_call "$stream" "$resp" 2>>"$SUGGEST_LOG" || [ ! -s "$resp" ]; then
+    log "ERROR name scout call failed"
+    return 1
+  fi
+  grep -qx 'NONE' "$resp" && return 0
+
+  [ -f "$ALIASES" ] || { mkdir -p "$(dirname "$ALIASES")"; : > "$ALIASES"; }
+
+  local data=0 added=0 line g names s pool new
+  while IFS= read -r line; do
+    case "$line" in
+      'f: '*|'m: '*|'x: '*) g="${line%%:*}"; names="${line#*: }" ;;
+      *) continue ;;   # not a data line (models sometimes add noise)
+    esac
+    data=$((data + 1))
+    pool=""
+    new=""
+    while IFS= read -r s; do
+      s="$(printf '%s' "$s" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+      [ -n "$s" ] || continue
+      [ "$s" = "$SELF_NAME" ] && continue
+      # hallucination guard: the name must literally occur in the candidates
+      grep -qF "$s" "$cand" || continue
+      if awk -F'\t' -v n="$s" '$1 == n { found = 1 } END { exit !found }' "$ALIASES"; then
+        # known spelling — remember its pool for any new sibling spelling
+        [ -n "$pool" ] || pool="$(awk -F'\t' -v n="$s" '$1 == n { print $2; exit }' "$ALIASES")"
+        continue
+      fi
+      # a "new name" that is one of our own aliases is a collision to untangle
+      # by hand, not to auto-map
+      grep -qwF "$s" "$ALIASES" && { log "WARN name scout: '$s' collides with an existing alias — left alone"; continue; }
+      new="${new:+$new$'\n'}$s"
+    done <<< "$(printf '%s' "$names" | tr '|' '\n')"
+    [ -n "$new" ] || continue
+    if [ -z "$pool" ]; then
+      pool="$(pick_reserve "$g" 3 "$cand" "$tmp/corpus.md" | paste -sd ',' - | sed 's/,/, /g')"
+      if [ -z "$pool" ]; then
+        log "ERROR name scout: reserve pool exhausted — withholding candidates"
+        return 1
+      fi
+    fi
+    while IFS= read -r s; do
+      printf '%s\t%s\n' "$s" "$pool" >> "$ALIASES"
+      added=$((added + 1))
+      log "aliases: auto-added '$s'"
+    done <<< "$new"
+  done < "$resp"
+
+  if [ "$data" -eq 0 ]; then
+    log "ERROR name scout output unusable (no data lines, no NONE)"
+    return 1
+  fi
+  [ "$added" -eq 0 ] || log "aliases: $added new name(s) now anonymized, this run and onward"
+  return 0
 }
 
 # Longitudinal gate stats, one line per candidate — so
@@ -1196,9 +1315,17 @@ main() {
   # any churn. One Claude call a day is the price of serendipity.
   local out counts written=0 rejected=0 gen_failed=0
   if out="$(generate "$tmp" "$inventory")"; then
-    counts="$(write_candidates "$tmp" "$out")"
-    written="${counts%% *}"
-    rejected="${counts##* }"
+    # Name scout before anything is written: a new person in the notes gets an
+    # alias row NOW, so the very post that introduces them is already covered.
+    # Failure withholds all candidates (fail closed) and the timer retries.
+    if extend_aliases "$tmp" "$out"; then
+      counts="$(write_candidates "$tmp" "$out")"
+      written="${counts%% *}"
+      rejected="${counts##* }"
+    else
+      gen_failed=1
+      log "WARN name scout failed; candidates withheld, curating the pool anyway"
+    fi
   else
     gen_failed=1
     log "WARN generation failed; curating the existing pool anyway"
