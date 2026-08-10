@@ -18,6 +18,8 @@ DO NOT:
 - Summarize, shorten (beyond removing filler), or expand — no added facts, examples, or emphasis.
 - Add any commentary, headers, or notes of your own.
 
+CONFIDENCE MARKS: the transcript may contain spans wrapped in ⟦unsure⟧ … ⟦/unsure⟧ — places where the speech-to-text model itself was unsure. The words inside are its best guess and may be misheard: read each marked span against its context, and if the intended words are clear, fix them. If a marked span stays unintelligible, keep the guess and mark it [unclear: best-guess]. Outside these marks, assume the transcription is right and be correspondingly reluctant to "fix" odd wording — odd but confidently-heard words are the author's voice. NEVER copy the ⟦unsure⟧ / ⟦/unsure⟧ marks into your output.
+
 Output ONLY the cleaned transcript text, nothing else.
 
 If a passage is unintelligible, keep your best guess and mark it with [unclear: best-guess].

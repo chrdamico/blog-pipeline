@@ -127,6 +127,11 @@ reclean_one() {
     return 1
   fi
 
+  # Same safety net as process.sh: ⟦unsure⟧ confidence marks (transcribe.sh
+  # writes them into newer verbatim.md files) never survive into cleaned.md.
+  sed -e 's/⟦unsure⟧//g' -e 's|⟦/unsure⟧||g' "$tmp/cleaned.md" > "$tmp/cleaned.stripped" \
+    && mv "$tmp/cleaned.stripped" "$tmp/cleaned.md"
+
   if cmp -s "$tmp/cleaned.md" "$dir/cleaned.md"; then
     log "UNCHANGED $name"
     rm -rf "$tmp"

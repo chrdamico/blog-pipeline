@@ -249,6 +249,13 @@ process_one() {
     return 1
   fi
 
+  # Safety net: the ⟦unsure⟧ confidence marks (see transcribe.sh) live in
+  # verbatim.md only; the prompt tells the cleaner to resolve them, and this
+  # guarantees none leak into cleaned.md — the corpus the verbatim gate
+  # compares against.
+  sed -e 's/⟦unsure⟧//g' -e 's|⟦/unsure⟧||g' "$tmp/cleaned.md" > "$tmp/cleaned.stripped" \
+    && mv "$tmp/cleaned.stripped" "$tmp/cleaned.md"
+
   # 2b. optional structure suggestion — a SEPARATE artifact, never merged into
   #     cleaned.md. Failure here is non-fatal: the draft is still valuable.
   if [ "$STRUCTURE" = 1 ]; then
