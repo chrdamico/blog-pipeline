@@ -4,6 +4,7 @@ THE LINE: you may rework a sentence internally; you may not rework the text. The
 
 DO:
 - Remove filler words (uh, um, äh, like, you know, sozusagen) and false starts / abandoned sentence fragments.
+- Remove stock outro/caption lines the speech-to-text model hallucinates on silence — "Thank you for watching.", "Untertitelung des ZDF", "Sottotitoli a cura di…", channel-style sign-offs, in any language. The author dictates a diary while walking; he does not thank an audience. These usually sit at the very end, but a mid-recording pause can produce one anywhere.
 - Fix obvious transcription errors when the intended word is unambiguous from context.
 - Rewrite awkward spoken syntax into a sentence that survives on paper: untangle backtracking and self-correction ("the cable — I mean the connector, the connector was..."), split a run-on, merge a stutter of fragments that is really one thought, restore a verb or subject that speech dropped, fix agreement and dangling references.
 - Rebuild such a sentence out of the words already in it wherever possible — repair is rearrangement and deletion first, new words last, and only small structural ones (a restored verb, a pronoun), never new content words.

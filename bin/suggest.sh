@@ -26,6 +26,10 @@
 #   - Posts/Keep/ is invisible here — never read, never judged, never evicted.
 #     Moving a file into it on the phone is how you promote it out of the pool.
 #   - eviction is a move to Discarded/, never an rm; age-out is the only deletion
+#   - anonymization is enforced at the synced boundary from both sides: the
+#     name scout extends the alias map before candidates are written, and the
+#     alias sweep rewrites any synced post a mapped name still appears in
+#     (bin/suggest.sh --sweep-only runs just the sweep)
 #   - nothing is ever overwritten; name collisions get -2, -3, ...
 #   - generation runs every run, even on unchanged notes: reuse holes and the
 #     corpus sample fall differently each day, so new stitchings stay possible
@@ -461,6 +465,99 @@ apply_aliases() {
       }
       print line
     }' "$map" -
+}
+
+# --- alias sweep ----------------------------------------------------------------
+# The rear guard to the name scout's front door: every run, every synced post
+# (pool, Keep/, Discarded/, Rejected/) is checked for real names from ALIASES
+# and rewritten with a fresh alias draw when one is found. Catches posts that
+# predate the map, hand edits, and anything the scout missed — idempotent,
+# because an already-clean file contains no mapped name and is left untouched.
+# The `sources:` block is exempt: those are real note paths the pool needs to
+# keep pointing at (they stay a known, accepted leak of note-filename slugs).
+# mtime is preserved so Discarded/ aging keeps measuring from eviction.
+# `bin/suggest.sh --sweep-only` runs just this (plus the lock) and exits.
+
+# Emit $1 minus its frontmatter `sources:` list — the text a sweep may judge.
+strip_sources() {
+  awk '
+    NR == 1 && $0 == "---" { fm = 1; print; next }
+    fm == 1 && $0 == "---" { fm = 2; print; next }
+    fm == 1 && /^sources:/ { insrc = 1; next }
+    fm == 1 && insrc && /^  - / { next }
+    fm == 1 { insrc = 0 }
+    { print }' "$1"
+}
+
+# Does $1 contain any real name from ALIASES (word-bounded)?
+has_real_name() {
+  local name
+  while IFS=$'\t' read -r name _; do
+    [ -n "$name" ] || continue
+    case $name in '#'*) continue ;; esac
+    grep -qwF "$name" "$1" && return 0
+  done < "$ALIASES"
+  return 1
+}
+
+# apply_aliases, but leaving the frontmatter `sources:` block untouched.
+#   $1 = alias map, $2 = file; result on stdout
+apply_aliases_outside_sources() {
+  local map="$1" file="$2"
+  if [ ! -s "$map" ]; then cat "$file"; return 0; fi
+  awk -F'\t' '
+    NR == FNR { if (NF >= 2) { keys[++nk] = $1; val[$1] = $2 } next }
+    !sorted {
+      for (i = 2; i <= nk; i++) {
+        k = keys[i]
+        for (j = i - 1; j >= 1 && length(keys[j]) < length(k); j--) keys[j + 1] = keys[j]
+        keys[j + 1] = k
+      }
+      sorted = 1
+    }
+    {
+      if (FNR == 1 && $0 == "---") fm = 1
+      else if (fm == 1 && $0 == "---") fm = 2
+      skip = 0
+      if (fm == 1) {
+        if ($0 ~ /^sources:/) insrc = 1
+        else if (insrc && $0 !~ /^  - /) insrc = 0
+        if (insrc) skip = 1
+      }
+      line = $0
+      if (!skip) {
+        for (i = 1; i <= nk; i++) {
+          out = ""
+          while ((p = index(line, keys[i])) > 0) {
+            out = out substr(line, 1, p - 1) val[keys[i]]
+            line = substr(line, p + length(keys[i]))
+          }
+          line = out line
+        }
+      }
+      print line
+    }' "$map" "$file"
+}
+
+alias_sweep() {
+  [ -s "$ALIASES" ] || return 0
+  local f map="$TMP/sweep.map" bare="$TMP/sweep.bare" fixed="$TMP/sweep.fixed"
+  local ref="$TMP/sweep.ref" changed=0
+  shopt -s nullglob
+  for f in "$POSTS"/*.md "$POSTS"/Keep/*.md "$POSTS"/Discarded/*.md "$POSTS"/Rejected/*.md; do
+    strip_sources "$f" > "$bare"
+    has_real_name "$bare" || continue
+    make_alias_map "$map"
+    cp -p "$f" "$ref"
+    apply_aliases_outside_sources "$map" "$f" > "$fixed" && mv "$fixed" "$f"
+    touch -r "$ref" "$f"
+    changed=$((changed + 1))
+    log "SWEEP anonymized $(basename "$f")"
+  done
+  shopt -u nullglob
+  if [ "$changed" -gt 0 ]; then
+    notify "$changed synced post(s) re-anonymized" "real names swept from Posts/"
+  fi
 }
 
 # --- name scout ---------------------------------------------------------------
@@ -1293,6 +1390,12 @@ main() {
 
   normalize_txt_notes
   archive_notes
+  alias_sweep
+
+  if [ "${1:-}" = "--sweep-only" ]; then
+    log "sweep-only run done"
+    return 0
+  fi
 
   build_corpus "$tmp/corpus.md"
   if [ "$NOTE_COUNT" -lt 2 ]; then

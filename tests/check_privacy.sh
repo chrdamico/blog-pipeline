@@ -42,12 +42,15 @@ done
 hits=$(git grep -I --cached -l -E '[A-Za-z0-9._%+-]+@smart-steel[a-z-]*\.[a-z]+' -- . 2>/dev/null || true)
 [ -z "$hits" ] || err "work email address in staged content: $(echo "$hits" | tr '\n' ' ')"
 
+# -w (word boundary): the map auto-grows via the name scout, and a short name
+# matched as a bare substring would block innocent words around it. Printing
+# the offending name is fine — it goes to the terminal, never into the commit.
 if [ -f private/aliases.tsv ]; then
   while IFS=$'\t' read -r real _; do
     [ -n "$real" ] || continue
     case $real in '#'*) continue ;; esac
-    hits=$(git grep -I --cached -l -F "$real" -- . 2>/dev/null || true)
-    [ -z "$hits" ] || err "a real name from private/aliases.tsv appears in: $(echo "$hits" | tr '\n' ' ')"
+    hits=$(git grep -I --cached -l -wF "$real" -- . 2>/dev/null || true)
+    [ -z "$hits" ] || err "real name '$real' (private/aliases.tsv) appears in: $(echo "$hits" | tr '\n' ' ')"
   done < private/aliases.tsv
 fi
 
