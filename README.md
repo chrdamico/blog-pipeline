@@ -253,7 +253,7 @@ All optional; sensible defaults are baked in.
 `bin/suggest.sh` only:
 
 - `MAX_LONG` (4) / `MAX_SHORT` (8) — how many suggestions of each kind survive.
-- `MAX_NEW` (3) — how many candidates one run may propose.
+- `MAX_NEW` (5) — how many candidates one run may propose.
 - `TRASH_DAYS` (14) — how long an evicted suggestion stays in `Posts/Discarded/`.
 - `CORPUS_MAX` (150000) — char budget for the notes fed to Claude. When over
   budget, the newest notes get ~70% and the rest is filled with a random sample

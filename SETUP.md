@@ -210,7 +210,7 @@ README for the mechanics; this is the part that needs *you*.
 
 **The loop, from your side**
 
-1. Overnight the job writes up to 3 candidates — `long` (a 400–900 word post) and
+1. Overnight the job writes up to 5 candidates — `long` (a 400–900 word post) and
    `short` (40–120 words, publishable as a tweet or Substack note).
 2. Over coffee, read them in Obsidian.
 3. Anything you'd actually publish: **long-press → Move → `Posts/Keep/`**. That
