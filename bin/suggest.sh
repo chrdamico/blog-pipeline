@@ -23,8 +23,10 @@
 #   - rejections are never silent: the near-miss is kept in Posts/Rejected/
 #     (synced, REJECT_DAYS) with its gate report, logged to logs/gate.tsv, fed
 #     back to the next generation call, and announced in the notification.
-#   - Posts/Keep/ is invisible here — never read, never judged, never evicted.
-#     Moving a file into it on the phone is how you promote it out of the pool.
+#   - Posts/Keep/ is never judged, never evicted, never rewritten. Moving a file
+#     into it on the phone is how you promote it out of the pool. The job reads
+#     it for exactly one purpose: a kept post's sentences are claimed, so they
+#     are not spent again (build_claimed) — and ONLY a kept post's are.
 #   - eviction is a move to Discarded/, never an rm; age-out is the only deletion
 #   - anonymization is enforced at the synced boundary from both sides: the
 #     name scout extends the alias map before candidates are written, and the
@@ -53,6 +55,10 @@
 #                 auto-extended by the name scout (NAME_SCAN=0 disables it,
 #                 SELF_NAME names the author, who is never aliased)
 #   CLAUDE_MODEL  model for the curator calls        (default claude-opus-5)
+#   TYPO_FIX      proofread typed notes in place, once each (default 1; 0 off)
+#   TYPO_MODEL    model for the typo pass             (default claude-sonnet-5)
+#   TYPO_MIN_LEN  words shorter than this are never "corrected" (default 4)
+#   TYPO_MAX_PCT  max % of a note's words a single pass may change (default 5)
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
 #   SUGGEST_SCHEDULED  set by the timer unit; a slot whose day already
 #                 succeeded (logs/suggest.lastdone) exits immediately
@@ -81,8 +87,11 @@ USAGE_TSV="$LOGS/usage.tsv"
 STAMP="$LOGS/suggest.lastdone"
 ALIAS_STATE="$LOGS/aliases.last"
 
+TYPOFIX_TSV="$LOGS/typofix.tsv"
+
 SUGGEST_PROMPT="$PROMPTS/suggest.md"
 CURATE_PROMPT="$PROMPTS/curate.md"
+TYPO_PROMPT="$PROMPTS/typos.md"
 NAMES_PROMPT="$PROMPTS/names.md"
 ANCHOR="$PROMPTS/style-anchor.md"
 
@@ -92,6 +101,9 @@ CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # is post-worthy, and writing in the author's voice — so it gets Opus. The
 # mechanical cleanup in process.sh runs on Sonnet.
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-5}"
+# Proofreading a typed note is the most mechanical call in the pipeline —
+# one word in, the same word spelled right out — so it runs on Sonnet.
+TYPO_MODEL="${TYPO_MODEL:-claude-sonnet-5}"
 NOTIFY="${NOTIFY:-$SCRIPT_DIR/notify.sh}"
 
 # --- knobs ------------------------------------------------------------------
@@ -108,6 +120,11 @@ NEW_SLACK_EVERY="${NEW_SLACK_EVERY:-25}"
 REJECT_DAYS="${REJECT_DAYS:-30}"
 REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
 REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
+# Typo pass over TYPED notes (see typofix_notes). Voice memos are proofread at
+# the transcription stage by prompts/cleanup.md and are never touched here.
+TYPO_FIX="${TYPO_FIX:-1}"
+TYPO_MIN_LEN="${TYPO_MIN_LEN:-4}"
+TYPO_MAX_PCT="${TYPO_MAX_PCT:-5}"
 # Anonymization map: real name -> comma-separated alias pool, drawn per post
 # (see make_alias_map below). Gitignored; absent = no-op for the map, but the
 # name scout (extend_aliases) creates and extends it on its own.
@@ -160,6 +177,16 @@ file_created_epoch() {
   b="$(stat -c %W "$1" 2>/dev/null || stat -f %B "$1" 2>/dev/null || echo 0)"
   case "$b" in ''|*[!0-9]*) b=0 ;; esac
   if [ "$b" -gt 0 ] && [ "$b" -lt "$m" ]; then printf '%s' "$b"; else printf '%s' "$m"; fi
+}
+
+# Content hash of a file (mirroring process.sh's, for the same reason: identity
+# by content, so a rename is not a new file).
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'   # macOS
+  fi
 }
 
 # Portable line shuffle (shuf is GNU-only): decorate with rand(), sort, strip.
@@ -259,18 +286,19 @@ pool_kind_of() {
 # Run one Claude call over a prepared stdin stream. Same contract as
 # process.sh's claude_transform: subscription auth, never an API key; run from
 # work/ with FS/exec tools denied, so the call can only read stdin and write
-# stdout. $1 = stream file, $2 = output file.
+# stdout. $1 = stream file, $2 = output file, $3 = model (default CLAUDE_MODEL —
+# the typo pass is the one caller that overrides it).
 claude_call() {
-  local rc=0
+  local rc=0 model="${3:-$CLAUDE_MODEL}"
   ( cd "$WORK" && "$CLAUDE_BIN" -p \
-      --model "$CLAUDE_MODEL" \
+      --model "$model" \
       --output-format text \
       --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" \
   ) < "$1" > "$2" || rc=$?
   # Usage ledger (see bin/stats.sh): stream sizes in chars — ~4 chars/token is
   # close enough for a gut feeling, which is all this is for.
   printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" suggest "$CLAUDE_MODEL" \
+    "$(date '+%Y-%m-%dT%H:%M:%S%z')" suggest "$model" \
     "$(wc -c < "$1" | tr -d ' ')" "$(wc -c < "$2" | tr -d ' ')" >> "$USAGE_TSV"
   return $rc
 }
@@ -753,16 +781,292 @@ archive_notes() {
   [ "$moved" -eq 0 ] || log "archived $moved note(s) into Obsidian/Archive/"
 }
 
+# --- typo pass over typed notes -----------------------------------------------
+# A voice memo is proofread the moment it is transcribed: prompts/cleanup.md
+# fixes obvious transcription errors, and nothing downstream has to care. A
+# TYPED note — thumbed into the phone one-handed, unproofread — had no such
+# stage, so its typos travelled verbatim into the corpus and out the other side
+# in a stitched post. This is that missing stage, and it lives here for the same
+# reason cleanup lives in process.sh: at capture, once, never again.
+#
+# It rewrites the note IN PLACE — the one place in this pipeline where raw input
+# is edited. That is deliberate: the note reads correctly on the phone too, the
+# corpus and the verbatim gate keep seeing exactly one version of the text, and
+# a post stitched next month inherits the fix for free. What keeps it honest is
+# that the model is never trusted with the result:
+#
+#   - one call per note, EVER (logs/typofix.tsv, keyed by content hash — both
+#     the pre- and post-fix hash are recorded, so a fixed note is not re-read
+#     next run, and a note you edit later gets exactly one fresh pass);
+#   - the output is not written anywhere. It is diffed against the note word by
+#     word, and the only thing extracted from it is a list of single-word
+#     substitutions, which are then applied to the ORIGINAL file. Everything the
+#     model did beyond respelling words — a reflowed line, a supplied comma, a
+#     tidied sentence — is discarded by construction, because there is no code
+#     path that could carry it across;
+#   - any substitution that is not typo-shaped fails the WHOLE note (typo_gate):
+#     it stays as typed and is never retried at that content hash.
+#
+# Voice bundles under drafts/ are excluded: they are already cleaned, and their
+# cleaned.md must keep matching verbatim.md and changes.diff.
+typofix_notes() {
+  [ "$TYPO_FIX" = 1 ] || return 0
+  if [ ! -f "$TYPO_PROMPT" ]; then
+    log "WARN $TYPO_PROMPT missing — typo pass skipped"
+    return 0
+  fi
+  local f rel h h2 rc n reason fixed_notes=0 scanned=0
+  local stream="$TMP/typo.in" out="$TMP/typo.out" subs="$TMP/typo.subs"
+  local merged="$TMP/typo.merged" ref="$TMP/typo.ref"
+  shopt -s nullglob
+  for f in "$VAULT"/*.md "$VAULT"/*.txt "$ARCHIVE"/*.md "$ARCHIVE"/*.txt; do
+    [ -s "$f" ] || continue
+    h="$(sha256 "$f")" || continue
+    grep -q "^$h	" "$TYPOFIX_TSV" 2>/dev/null && continue
+    rel="${f#"$REPO_DIR"/}"
+    scanned=$((scanned + 1))
+
+    {
+      cat "$TYPO_PROMPT"
+      printf '\n\n===== BEGIN INPUT (proofread ONLY the text between the markers; output nothing else) =====\n'
+      cat "$f"
+      printf '\n===== END INPUT =====\n'
+    } > "$stream"
+
+    rc=0
+    claude_call "$stream" "$out" "$TYPO_MODEL" || rc=$?
+    if [ "$rc" -ne 0 ] || [ ! -s "$out" ]; then
+      log "WARN typo pass failed on $rel (exit $rc) — left as typed"
+      typofix_record "$h" "$rel" "FAILED"
+      continue
+    fi
+
+    rc=0
+    strip_fence "$out" | typo_gate "$f" > "$subs" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      reason="$(sed -n 's/^REJECT //p' "$subs" | head -n 1)"
+      log "WARN typo pass rejected on $rel: ${reason:-unusable output} — left as typed"
+      typofix_record "$h" "$rel" "REJECTED ${reason:-unusable output}"
+      continue
+    fi
+
+    awk -F'\t' -v f="$(basename "$f")" '$1 == "SKIP" {
+      printf "declined on %s: %s -> %s (under TYPO_MIN_LEN)\n", f, $4, $5 }' "$subs" \
+      | while IFS= read -r line; do log "TYPO-SKIP $line"; done
+
+    n="$(awk -F'\t' '$1 == "SUB"' "$subs" | wc -l | tr -d ' ')"
+    if [ "$n" -eq 0 ]; then
+      typofix_record "$h" "$rel" "clean"
+      continue
+    fi
+
+    # Apply to the ORIGINAL, not the model's text: every byte the gate did not
+    # explicitly approve — indentation, blank lines, the missing full stop —
+    # survives untouched.
+    cp -p "$f" "$ref"
+    typo_apply "$subs" "$f" > "$merged" && mv "$merged" "$f"
+    touch -r "$ref" "$f"     # mtime is corpus recency and the archive clock
+    awk -F'\t' '$1 == "SUB" { print $4 "\t" $5 }' "$subs" | while IFS=$'\t' read -r old new; do
+      log "TYPO $(basename "$f"): $old -> $new"
+    done
+    fixed_notes=$((fixed_notes + 1))
+    h2="$(sha256 "$f")"
+    typofix_record "$h"  "$rel" "fixed $n"
+    typofix_record "$h2" "$rel" "fixed $n (post)"
+  done
+  shopt -u nullglob
+  [ "$scanned" -eq 0 ] || log "typo pass: $scanned note(s) read, $fixed_notes corrected"
+  [ "$fixed_notes" -eq 0 ] || notify "$fixed_notes typed note(s) proofread" "typos fixed in the vault"
+}
+
+typofix_record() {   # $1 hash  $2 rel path  $3 result
+  printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$3" >> "$TYPOFIX_TSV"
+}
+
+# Strip a markdown code fence the model may have wrapped its answer in. Nothing
+# else about the output is repaired — a stray sentence of commentary is left in
+# place so the gate can reject the note, which is the correct outcome.
+strip_fence() {
+  awk '{ lines[NR] = $0 }
+    END {
+      first = 1; last = NR
+      if (lines[1] ~ /^```/ && lines[NR] ~ /^```[[:space:]]*$/ && NR >= 2) { first = 2; last = NR - 1 }
+      for (i = first; i <= last; i++) print lines[i]
+    }' "$1"
+}
+
+# The gate. Reads the ORIGINAL ($1) and the model's version (stdin) and decides
+# whether the difference is nothing but respelled words.
+#
+# stdout on success: one line per differing word, as
+#   SUB  \t <line no> \t <word no> \t <old> \t <new>   approved
+#   SKIP \t <line no> \t <word no> \t <old> \t <new>   declined, note still fine
+# stdout on failure: a single "REJECT <reason>" line, exit 1. Rejection is
+# all-or-nothing per note — a model that got one word wrong does not get to keep
+# the others, because the failure mode this guards against (a quietly improved
+# sentence) looks exactly like a run of legitimate small edits.
+#
+# SKIP is the one exception, and only for the short-word rule. That rule is not
+# there to catch a misbehaving model; it is there because a three-letter token
+# is unknowable from the outside, so declining just that word is exact. Failing
+# the note over it would throw away real fixes and — since the note is never
+# re-read at that hash — throw them away permanently.
+#
+# A word may change only if:
+#   - it sits at the same line and word position, with identical punctuation
+#     around it and inside it (so `dont` -> `don't` is a REJECT: that is
+#     punctuation, not spelling);
+#   - its core is at least TYPO_MIN_LEN characters — under that lives the whole
+#     population of acronyms, initialisms and shorthand (wbe, tbh, iir), which
+#     cannot be told from typos by shape, so none of them are ever touched
+#     (SKIP, not REJECT);
+#   - the change is not case-only (that would be capitalization, not spelling);
+#   - both spellings are plain words: no digits, no symbols, and no bytes
+#     outside ASCII. The last rule means a word carrying an umlaut is never
+#     "corrected" — which is also the German/Denglisch rule, enforced rather
+#     than requested;
+#   - the two spellings are within a small edit distance (2, or 3 for long
+#     words): a typo is a slipped finger, not a different word.
+# And the note as a whole may not change more than TYPO_MAX_PCT of its words
+# (minimum 3), which is what a proofreader does; more than that is a rewrite.
+#
+# What this CANNOT catch: a plain-ASCII word swapped for another plain-ASCII
+# word one edit away, where the intent was grammar rather than spelling — a
+# German declension (ganze -> ganzen) is the realistic case, since umlaut words
+# are already immune. Only prompts/typos.md forbids that, and a wrong one shows
+# up in logs/typofix.tsv and the TYPO lines in the log, which is why every
+# substitution is recorded by name.
+typo_gate() {
+  awk -v minlen="$TYPO_MIN_LEN" -v maxpct="$TYPO_MAX_PCT" '
+    function lev(a, b,   la, lb, i, j, cost, prev, cur) {
+      la = length(a); lb = length(b)
+      if (la == 0) return lb
+      if (lb == 0) return la
+      for (j = 0; j <= lb; j++) prev[j] = j
+      for (i = 1; i <= la; i++) {
+        cur[0] = i
+        for (j = 1; j <= lb; j++) {
+          cost = (substr(a, i, 1) == substr(b, j, 1)) ? 0 : 1
+          cur[j] = prev[j] + 1
+          if (cur[j - 1] + 1 < cur[j])      cur[j] = cur[j - 1] + 1
+          if (prev[j - 1] + cost < cur[j])  cur[j] = prev[j - 1] + cost
+        }
+        for (j = 0; j <= lb; j++) prev[j] = cur[j]
+      }
+      return prev[lb]
+    }
+    # A word split into its punctuation shell and its core: "(cobsciousness?" ->
+    # lead "(", core "cobsciousness", trail "?".
+    function lead(t)  { return match(t, /^[^[:alnum:]]+/) ? substr(t, 1, RLENGTH) : "" }
+    function trail(t) { return match(t, /[^[:alnum:]]+$/) ? substr(t, RSTART)     : "" }
+    function core(t)  { sub(/^[^[:alnum:]]+/, "", t); sub(/[^[:alnum:]]+$/, "", t); return t }
+    function reject(msg) { printf "REJECT %s\n", msg; exit 1 }
+    # Last line that is not trailing whitespace: the model reliably drops or adds
+    # a final blank line, and that is not a difference worth failing a note over.
+    function effective_last(arr, n,   i) {
+      for (i = n; i >= 1; i--) if (arr[i] ~ /[^[:space:]]/) return i
+      return 0
+    }
+    NR == FNR { o[FNR] = $0; on = FNR; next }
+                { m[FNR] = $0; mn = FNR }
+    END {
+      oe = effective_last(o, on); me = effective_last(m, mn)
+      if (oe != me) reject(sprintf("line count %d -> %d", oe, me))
+      changed = 0; words = 0
+      for (i = 1; i <= oe; i++) {
+        na = split(o[i], A); nb = split(m[i], B)
+        words += na
+        if (na != nb) reject(sprintf("line %d: word count %d -> %d", i, na, nb))
+        for (j = 1; j <= na; j++) {
+          if (A[j] == B[j]) continue
+          ca = core(A[j]); cb = core(B[j])
+          if (lead(A[j]) != lead(B[j]) || trail(A[j]) != trail(B[j]))
+            reject(sprintf("punctuation changed: %s -> %s", A[j], B[j]))
+          if (length(ca) < minlen) {
+            skipped++
+            skip_old[skipped] = A[j]; skip_new[skipped] = B[j]
+            continue
+          }
+          if (tolower(ca) == tolower(cb))
+            reject(sprintf("case-only change: %s -> %s", A[j], B[j]))
+          # Internal punctuation must survive too, or a supplied apostrophe
+          # (dont -> the contraction) and hyphenation (motherinlaw ->
+          # mother-in-law) would pass as respellings. Both are punctuation, and
+          # punctuation is not what this pass is for.
+          pa = ca; gsub(/[A-Za-z]/, "", pa)
+          pb = cb; gsub(/[A-Za-z]/, "", pb)
+          if (pa != pb)
+            reject(sprintf("punctuation changed: %s -> %s", A[j], B[j]))
+          if (ca ~ /[^A-Za-z'"'"'-]/ || cb ~ /[^A-Za-z'"'"'-]/)
+            reject(sprintf("not a plain word: %s -> %s", A[j], B[j]))
+          # The distance a typo is allowed to travel scales with the word, or a
+          # short word drifts into a different one: like -> love is distance 2
+          # on four letters, which is a rewrite of the sentence, not a slipped
+          # finger — and on this corpus it is exactly the wrong word to get
+          # wrong. Long words keep the looser cap: freinds -> friends is a
+          # transposition, which Levenshtein charges 2 for.
+          maxd = length(ca) >= 10 ? 3 : (length(ca) >= 6 ? 2 : 1)
+          if (lev(tolower(ca), tolower(cb)) > maxd)
+            reject(sprintf("different word, not a typo: %s -> %s", A[j], B[j]))
+          changed++
+          sub_line[changed] = i; sub_word[changed] = j
+          sub_old[changed] = A[j]; sub_new[changed] = B[j]
+        }
+      }
+      allow = int(words * maxpct / 100); if (allow < 3) allow = 3
+      if (changed > allow)
+        reject(sprintf("%d words changed in a %d-word note (cap %d)", changed, words, allow))
+      for (k = 1; k <= changed; k++)
+        printf "SUB\t%d\t%d\t%s\t%s\n", sub_line[k], sub_word[k], sub_old[k], sub_new[k]
+      for (k = 1; k <= skipped; k++)
+        printf "SKIP\t0\t0\t%s\t%s\n", skip_old[k], skip_new[k]
+    }' "$1" -
+}
+
+# Apply approved substitutions ($1) to a note ($2); result on stdout. Walks each
+# line token by token so the original spacing is reproduced byte for byte, and
+# swaps a word only where the gate approved that exact word at that exact
+# position.
+typo_apply() {
+  awk -F'\t' '
+    NR == FNR { if ($1 == "SUB") { key = $2 SUBSEP $3; old[key] = $4; new[key] = $5 } next }
+    {
+      rest = $0; out = ""; idx = 0
+      while (length(rest) > 0) {
+        if (match(rest, /^[[:space:]]+/)) {
+          out = out substr(rest, 1, RLENGTH); rest = substr(rest, RLENGTH + 1); continue
+        }
+        match(rest, /^[^[:space:]]+/)
+        tok = substr(rest, 1, RLENGTH); rest = substr(rest, RLENGTH + 1)
+        # ++idx on its own line: "FNR SUBSEP ++idx" is parsed by awk as
+        # (SUBSEP++) concatenated with idx, silently keying every lookup wrong.
+        idx++
+        key = FNR SUBSEP idx
+        if (key in old && tok == old[key]) tok = new[key]
+        out = out tok
+      }
+      print out
+    }' "$1" "$2"
+}
+
 # --- sentence reuse -----------------------------------------------------------
 # "One sentence, one post" — enforced softly, and PER KIND. A sentence that
-# already carries a LIVE post (pool or Keep/) is claimed for that post's kind
-# only: a sentence spent on a long may still open a short, and vice versa —
-# only same-kind repetition is damped. Each claimed sentence is enforced
+# already carries a post you KEPT is claimed for that post's kind only: a
+# sentence spent on a long may still open a short, and vice versa — only
+# same-kind repetition is damped. Each claimed sentence is enforced
 # REUSE_DROP_PCT% of the time (one die per sentence per run, shared by both
 # kinds), so an iconic line still resurfaces now and then. Sentences under
 # REUSE_MIN_WORDS words are never claimed ("No!" belongs to every post).
-# Discarded/ and Rejected/ claim nothing: a sentence spent on a post that died
-# returns to circulation.
+#
+# ONLY Keep/ CLAIMS. The pool does not: a candidate is disposable by design —
+# it ages out, gets evicted by the curator, or is thrown away unread — and a
+# sentence must not be locked up by a post that was never chosen. Reserving
+# material for a candidate reserves it for something that probably dies, which
+# is the opposite of the rule's purpose. So a line that appears in today's pool
+# is still free for tomorrow's better stitching of the same idea; the pool cap
+# and the curator's near-duplicate eviction are what keep the pool itself from
+# repeating, and they do that by reading the candidates, not by hiding material.
+# Discarded/ and Rejected/ claim nothing either, for the same reason.
 #
 # Enforcement is split because one corpus feeds both kinds in a single call:
 #   - claimed by BOTH kinds -> hidden from the corpus as a […] hole (the model
@@ -788,9 +1092,10 @@ build_claimed() {
   shopt -s nullglob
   for pv in "$PROVENANCE"/*.md; do
     base="$(basename "$pv")"
-    if   [ -f "$POSTS/$base" ];      then pool="$POSTS/$base"
-    elif [ -f "$POSTS/Keep/$base" ]; then pool="$POSTS/Keep/$base"
-    else continue; fi
+    # Keep/ only — a provenance report whose post is in the pool, Discarded/ or
+    # Rejected/ claims nothing (see the note above).
+    [ -f "$POSTS/Keep/$base" ] || continue
+    pool="$POSTS/Keep/$base"
     kind="$(pool_kind_of "$pool")"
     case "$kind" in long|short) ;; *) continue ;; esac
     awk -v min="$REUSE_MIN_WORDS" -v kind="$kind" '
@@ -1013,6 +1318,101 @@ build_corpus() {
   skipped=$((total - NOTE_COUNT))
   [ "$skipped" -eq 0 ] \
     || log "corpus: $skipped note(s) omitted, $sampled older one(s) sampled in — CORPUS_MAX=$CORPUS_MAX chars"
+}
+
+# --- provenance backfill ------------------------------------------------------
+# A post claims its sentences through its provenance report (build_claimed), so
+# a Keep/ post WITHOUT one claims nothing — silently. That is the worst possible
+# direction for the rule to fail in: the posts you chose to keep are exactly the
+# ones whose lines should not be spent twice. It is a real state, not a
+# hypothetical — Keep/2026-08-09-long-the-whole-idea-of-editing-is.md predates
+# the provenance step and had been claiming nothing for days.
+#
+# So: any Keep/ post missing a report gets one rebuilt by re-matching its body
+# against the corpus, exactly as verbatim_gate does at generation time. The
+# verdict is discarded — a reconstruction is not a gate, and a post already in
+# Keep/ passed the real one when it was written.
+#
+# A reconstruction is APPROXIMATE and says so in the file it writes:
+#   - the post is anonymized and the corpus is not, so any sentence carrying a
+#     name fails to match and claims nothing;
+#   - notes are edited, so a sentence whose source has since been reworded (or
+#     proofread by typofix_notes) no longer matches either.
+# Both failures are safe in the same direction: a sentence that cannot be found
+# is simply not claimed, which is the state the post was already in. On the one
+# post this exists for, 33 of 40 sentences come back.
+#
+# Runs before build_corpus, because build_claimed reads what this writes.
+emit_full_corpus() {
+  local out="$1" f rel
+  : > "$out"
+  while IFS=$'\t' read -r _ f; do
+    rel="${f#"$REPO_DIR"/}"
+    {
+      printf '\n### NOTE id=%s\n\n' "$rel"
+      cat "$f"
+      printf '\n'
+    } >> "$out"
+  done < <(corpus_files | sort -rn)
+}
+
+# A post file stripped to the text verbatim_gate wants: no frontmatter, and no
+# "# Title" line (the generator adds that after the gate has run, so a
+# reconstruction has to take it back off).
+post_body() {
+  awk 'NR == 1 && $0 == "---" { fm = 1; next }
+       fm == 1 && $0 == "---"  { fm = 2; next }
+       fm == 1                 { next }
+       !h1 && /^# /            { h1 = 1; next }
+       { print }' "$1"
+}
+
+backfill_provenance() {
+  local f base id kind rep body corpus="$TMP/corpus.full"
+  local n_claim n_sent rebuilt=0
+  local missing=()
+  shopt -s nullglob
+  for f in "$POSTS"/Keep/*.md; do
+    base="$(basename "$f")"
+    [ -f "$PROVENANCE/$base" ] && continue
+    kind="$(pool_kind_of "$f")"
+    case "$kind" in long|short) ;; *) continue ;; esac   # not ours; leave alone
+    missing+=("$f")
+  done
+  shopt -u nullglob
+  [ "${#missing[@]}" -gt 0 ] || return 0
+
+  emit_full_corpus "$corpus"
+  body="$TMP/backfill.body"; rep="$TMP/backfill.prov"
+
+  for f in "${missing[@]}"; do
+    base="$(basename "$f")"; id="${base%.md}"
+    post_body "$f" > "$body"
+    # Verdict ignored on purpose (see above) — only the classification lines are
+    # wanted, and a FAIL line among them is harmless: build_claimed reads only
+    # the VERBATIM/TWEAKED ones.
+    verbatim_gate "$body" "$corpus" > "$rep" || true
+    n_claim="$(grep -cE '^- (VERBATIM|TWEAKED) ' "$rep" || true)"
+    n_sent="$(grep -cE '^- ' "$rep" || true)"
+    if [ "${n_claim:-0}" -eq 0 ]; then
+      log "WARN Keep/$base has no provenance and none could be rebuilt — it claims nothing"
+      continue
+    fi
+    {
+      printf '# provenance: %s\n' "$id"
+      printf '#\n'
+      printf '# RECONSTRUCTED %s. This post predates the provenance step, so the\n' "$(date '+%Y-%m-%d')"
+      printf '# generation-time report is gone for good; these lines were recovered by\n'
+      printf '# re-matching the post against the corpus (%s of %s sentences found).\n' \
+        "$n_claim" "${n_sent:-0}"
+      printf '# It exists so the post can claim its sentences — it is NOT a record of\n'
+      printf '# what the model actually did, and the unmatched sentences claim nothing.\n\n'
+      cat "$rep"
+    } > "$PROVENANCE/$base"
+    rebuilt=$((rebuilt + 1))
+    log "PROVENANCE rebuilt for Keep/$base — $n_claim of ${n_sent:-0} sentence(s) recovered"
+  done
+  [ "$rebuilt" -eq 0 ] || log "provenance: $rebuilt Keep/ post(s) backfilled"
 }
 
 # --- pool inventory ---------------------------------------------------------
@@ -1396,6 +1796,18 @@ main() {
     log "sweep-only run done"
     return 0
   fi
+
+  # Before the corpus is read, so a typo is fixed once at the source rather than
+  # in every post stitched out of it.
+  typofix_notes
+
+  if [ "${1:-}" = "--typos-only" ]; then
+    log "typos-only run done"
+    return 0
+  fi
+
+  # Before build_corpus: build_claimed runs inside it and reads what this writes.
+  backfill_provenance
 
   build_corpus "$tmp/corpus.md"
   if [ "$NOTE_COUNT" -lt 2 ]; then

@@ -94,8 +94,11 @@ blog-pipeline/
 │   ├── structure.md    # optional outline-suggestion prompt
 │   ├── suggest.md      # find convergences, write candidate posts
 │   ├── curate.md       # choose the best N-subset of an overflowing pool
+│   ├── names.md        # the name scout: list person names to anonymize
+│   ├── typos.md        # proofread a typed note: spelling only, nothing else
 │   └── style-anchor.example.md # template: copy to style-anchor.md (gitignored) + add your writing
 ├── tests/             # check_privacy.sh: nothing personal is ever committed
+│                      # check_typo_gate.sh: the typo pass only respells words
 ├── .githooks/         # pre-commit hook running that check (wired by install.sh)
 ├── watcher/           # systemd user units + (untested) macOS launchd plists
 ├── sync/              # THE Syncthing folder (the phone calls it /blog)
@@ -111,9 +114,10 @@ Syncthing pairing carries recordings, notes, and suggestions alike.
 ## Text notes (`sync/Obsidian/`)
 
 A separate space from the voice pipeline: typed notes are plain `.md` / `.txt`
-files at the root of the vault, never processed, cleaned, or rewritten. Same
-Syncthing folder as the recordings, one level down — write on the phone
-(Obsidian, or any editor that saves into a folder) or on the laptop:
+files at the root of the vault, never cleaned, restructured, or rewritten — the
+one thing that does touch their text is the typo pass below. Same Syncthing
+folder as the recordings, one level down — write on the phone (Obsidian, or any
+editor that saves into a folder) or on the laptop:
 
 ```sh
 bin/note.sh                      # opens $EDITOR; filename comes from line 1
@@ -133,7 +137,47 @@ moves it to `Obsidian/Archive/<date>-<slug>.<ext>` — date from when the note w
 slug from its first line — so the archive is dated and titled even when the
 capture wasn't. Renames are propagated into the `sources:` of every pool and
 `Keep/` post, archived notes stay part of the corpus, and `note.sh -l` / `-e`
-see the archive too. Content is never touched, only the name.
+see the archive too. Archiving only ever changes the name, never the text.
+
+### The typo pass: proofread once, at capture
+
+A voice memo is proofread the moment it is transcribed — `prompts/cleanup.md`
+fixes obvious transcription errors and nothing downstream has to care. A note
+thumbed into the phone one-handed had no such stage, so its typos travelled
+verbatim into the corpus and came out the other side inside a stitched post.
+
+The daily job now proofreads each typed note **once**, before it reads the
+corpus, and rewrites it in place — so the note reads correctly on the phone too,
+the verbatim gate keeps seeing exactly one version of the text, and a post
+stitched next month inherits the fix. This is the only place in the pipeline
+where raw input is edited, so the model is never trusted with the result:
+
+- **one call per note, ever** — `logs/typofix.tsv` is keyed by content hash, and
+  records both the before and after hash, so a fixed note is not re-read next
+  run and a note *you* edit later gets exactly one fresh pass;
+- **the model's text is never written anywhere.** It is diffed against the note
+  word by word, and all that is extracted is a list of single-word
+  substitutions, which are applied to the *original* file. A reflowed line, a
+  supplied comma, a tidied sentence cannot survive that trip — there is no code
+  path that would carry them across;
+- **anything not typo-shaped fails the whole note**, which is then left as typed
+  and never retried at that hash: a changed word count, moved punctuation, a
+  supplied apostrophe (`dont` → `don't` is punctuation, not spelling), a
+  case-only change, a word carrying a non-ASCII letter (so German and Denglisch
+  are immune), an edit too large to be a slipped finger, or more than
+  `TYPO_MAX_PCT` of the note's words at once;
+- **short words are declined, not failed.** Nothing under `TYPO_MIN_LEN` (4) is
+  ever "corrected": `wbe`, `tbh`, `iir` are acronyms and shorthand, and no rule
+  can tell those from typos by shape. That one word is skipped and the note's
+  real fixes still land.
+
+Every substitution is logged by name (`TYPO <note>: cobsciousness ->
+consciousness`), and every declined one too, so the pass is auditable after the
+fact. What it cannot catch mechanically is a plain-ASCII word swapped for
+another one edit away when the intent was grammar — a German declension
+(`ganze` → `ganzen`) is the realistic case; only the prompt forbids that.
+`TYPO_FIX=0` turns the whole stage off, and `bin/suggest.sh --typos-only` runs
+just this and exits.
 
 ## Post suggestions (`sync/Obsidian/Posts/`)
 
@@ -184,18 +228,31 @@ Guardrails worth knowing:
   each sentence came from, and what little glue was added — the posts'
   equivalent of the drafts' `changes.diff` (laptop-only: it quotes pre-alias
   text, so it is stignored).
-- **A sentence mostly carries one post — per kind.** Sentences already
-  stitched into a *live* post (pool or `Keep/`) are claimed for that post's
-  kind only: a sentence spent on a long is still fair game for a short, and
-  vice versa — only same-kind repetition is damped. Each claim is enforced
+- **A sentence mostly carries one post — per kind, and only once you keep it.**
+  Sentences stitched into a post in `Keep/` are claimed for that post's kind
+  only: a sentence spent on a long is still fair game for a short, and vice
+  versa — only same-kind repetition is damped. Each claim is enforced
   `REUSE_DROP_PCT`% of the time (75; one die per sentence per run), so an
   iconic line still resurfaces now and then. A sentence claimed by *both*
   kinds is hidden from the corpus as a `[…]` hole the model is told not to
   bridge; one claimed by a single kind stays visible but is listed as a
   RESERVED SENTENCE in the prompt, and a candidate that reuses it in a post of
   the same kind is rejected by the gate. Sentences under `REUSE_MIN_WORDS` (6)
-  words are never claimed, and posts in `Discarded/`/`Rejected/` claim
-  nothing: a sentence spent on a post that died returns to circulation.
+  words are never claimed.
+  **Only `Keep/` claims.** A candidate sitting in the pool does not: it is
+  disposable by design — it ages out, the curator evicts it, or you never read
+  it — and a sentence must not be locked away by a post that was never chosen.
+  So a line in today's pool stays available for tomorrow's better stitching of
+  the same idea; what stops the *pool* repeating itself is the cap and the
+  curator's near-duplicate eviction, which read the candidates rather than
+  hiding the material. `Discarded/` and `Rejected/` claim nothing either: a
+  sentence spent on a post that died returns to circulation.
+  A `Keep/` post with no provenance report would claim nothing at all — the
+  silent failure in the worst direction — so any that lacks one (posts written
+  before provenance existed) has it rebuilt at the start of the run by
+  re-matching the post against the corpus. The rebuilt file says so in its
+  header: it is approximate, since a sentence carrying an aliased name or a
+  since-reworded source will not match, and unmatched sentences claim nothing.
 - **Rejections are never silent.** A gate-rejected candidate is kept in
   `Posts/Rejected/` (synced to the phone, aged out after `REJECT_DAYS`) with
   its gate report appended, logged to `logs/gate.tsv`, counted in the desktop
@@ -273,6 +330,14 @@ All optional; sensible defaults are baked in.
   against new posts *of the same kind* this often.
 - `ALIASES` (`private/aliases.tsv`) — real-name → alias-pool map; one alias is
   drawn per person per post.
+- `TYPO_FIX` (1) — proofread each typed note once, in place, before the corpus
+  is read; `0` turns the stage off entirely.
+- `TYPO_MODEL` (`claude-sonnet-5`) — the typo pass is the most mechanical call
+  in the pipeline, so it does not run on the curator's model.
+- `TYPO_MIN_LEN` (4) — words shorter than this are never "corrected": that is
+  where acronyms and shorthand live (`wbe`, `tbh`).
+- `TYPO_MAX_PCT` (5) — most of a note a single pass may change, minimum 3 words.
+  Above it the whole note is rejected: that is a rewrite, not proofreading.
 
 ## Status
 
