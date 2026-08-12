@@ -262,9 +262,22 @@ ls drafts/*/
 ```
 
 You should get `drafts/<today>-<slug>/` containing the audio, `verbatim.md`,
-`cleaned.md`, and `changes.diff`, plus a desktop notification. Re-running
-`bin/process.sh` does nothing (idempotent). Delete the test bundle afterward if
-you like — nothing else references it.
+`cleaned.md`, `changes.diff` and `meta.json` (what configuration produced it),
+plus a desktop notification. Re-running `bin/process.sh` does nothing
+(idempotent). Delete the test bundle afterward if you like — nothing else
+references it.
+
+A safer way to try anything out, once or a hundred times: re-root the tree.
+
+```sh
+BLOG_ROOT=/tmp/blogtest bin/process.sh     # reads and writes only under there
+lib/config.sh paths                        # where a given environment would go
+```
+
+`BLOG_ROOT` moves every data path at once — `sync/`, `drafts/`, `logs/`,
+`work/`, the alias map — while the code, the prompts and the whisper model stay
+where they ship. Nothing under it can touch the live archive or the phone, which
+is what makes `bin/ab.sh` (README → *Experiments*) possible.
 
 Optional structure outline (a separate `structure.md`, never merged into the
 cleaned text):

@@ -543,6 +543,13 @@ whisper.cpp + large-v3-q5_0 model, `-mc 0` anti-repetition), the systemd user ti
 (Fossify Voice Recorder). First real memos processed 2026-07-28; see `SETUP.md`
 for the operating commands, benchmark, and the macOS migration.
 
+The experiment layer (`lib/config.sh`, provenance stamps, `bin/ab.sh`,
+`bin/score.sh`) is in place and the default configuration is unchanged by it —
+a profileless run resolves to exactly the values that were hard-coded before,
+and `tests/check_defaults.sh` asserts it value by value. Every artifact from
+here on is stamped with the variant that made it; everything older honestly says
+`pre-experiment`.
+
 Privacy is enforced, not just promised: `tests/check_privacy.sh` — run as a
 pre-commit hook — fails any commit that would track a file under the personal
 paths (`sync/`, `drafts/`, `private/`, …), any audio file, a weakened
