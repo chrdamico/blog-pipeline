@@ -35,6 +35,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/provenance.sh
+. "$REPO_DIR/lib/provenance.sh"
 
 CLAUDE_MODEL="$CLEANUP_MODEL"
 
@@ -72,8 +74,14 @@ acquire_lock() {
 
 # Same contract as process.sh's claude_transform: subscription auth, run from
 # work/ with FS/exec tools denied — reads stdin, writes stdout, nothing else.
+LAST_IN_CHARS=0
+LAST_OUT_CHARS=0
+LAST_SECONDS=0
+
 claude_transform() {
   local prompt_file="$1" in_file="$2" out_file="$3" rc=0
+  local started
+  started="$(date +%s)"
   {
     cat "$prompt_file"
     if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
@@ -85,13 +93,17 @@ claude_transform() {
         --output-format text \
         --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" ) \
       > "$out_file" || rc=$?
-  local in_chars
+  local in_chars out_chars
   in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
   [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
+  out_chars="$(wc -c < "$out_file" | tr -d ' ')"
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "reclean:$(basename "$prompt_file" .md)" \
-    "$CLAUDE_MODEL" "$in_chars" "$(wc -c < "$out_file" | tr -d ' ')" \
-    >> "$LOGS/usage.tsv"
+    "$CLAUDE_MODEL" "$in_chars" "$out_chars" \
+    >> "$USAGE_TSV"
+  LAST_IN_CHARS="$in_chars"
+  LAST_OUT_CHARS="$out_chars"
+  LAST_SECONDS=$(( $(date +%s) - started ))
   return $rc
 }
 
@@ -128,6 +140,11 @@ reclean_one() {
     && mv "$tmp/cleaned.stripped" "$tmp/cleaned.md"
 
   if cmp -s "$tmp/cleaned.md" "$dir/cleaned.md"; then
+    # Byte-identical output is still a fact about this configuration, and one
+    # worth recording: "the loose prompt changed nothing here" is a result.
+    prov_write_meta "$dir" reclean "" "" "$dir/verbatim.md" "$dir/cleaned.md" \
+      "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS"
+    prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12),unchanged"
     log "UNCHANGED $name"
     rm -rf "$tmp"
     return 0
@@ -160,6 +177,14 @@ reclean_one() {
   done
 
   rm -rf "$tmp"
+
+  # The bundle's meta.json now describes the configuration that produced the
+  # cleaned.md sitting there — which is this one, not the one from the original
+  # run. first_seen is carried over so the bundle keeps its own age.
+  prov_write_meta "$dir" reclean "" "" "$dir/verbatim.md" "$dir/cleaned.md" \
+    "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS"
+  prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12)"
+
   log "RECLEANED $name"
   return 0
 }

@@ -74,6 +74,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/provenance.sh
+. "$REPO_DIR/lib/provenance.sh"
 
 # Curation is the judgment-heavy step — reading the whole corpus, deciding what
 # is post-worthy, and writing in the author's voice — so it gets Opus. The
@@ -81,6 +83,11 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # mechanical call in the pipeline: one word in, the same word spelled right
 # out) on Sonnet as well.
 CLAUDE_MODEL="$CURATE_MODEL"
+
+# The persona whose generation call is currently being written up. Empty for
+# the anonymous single call that is the default and, until PERSONAS is set,
+# the only one there is (see generate_all).
+PERSONA=""
 
 mkdir -p "$POSTS" "$POSTS/Keep" "$TRASH" "$REJECTED" "$ARCHIVE" "$PROVENANCE" "$WORK" "$LOGS"
 
@@ -1338,6 +1345,12 @@ backfill_provenance() {
     fi
     {
       printf '# provenance: %s\n' "$id"
+      # A post from before the experiment layer has no variant to report, and
+      # saying nothing would let it be counted as whatever runs today. So it
+      # says what is true: it came from before any of this.
+      printf '# variant: pre-experiment\n'
+      printf '# persona: \n'
+      printf '# run: %s\n' "$BLOG_RUN_ID"
       printf '#\n'
       printf '# RECONSTRUCTED %s. This post predates the provenance step, so the\n' "$(date '+%Y-%m-%d')"
       printf '# generation-time report is gone for good; these lines were recovered by\n'
@@ -1347,6 +1360,7 @@ backfill_provenance() {
       printf '# what the model actually did, and the unmatched sentences claim nothing.\n\n'
       cat "$rep"
     } > "$PROVENANCE/$base"
+    prov_record backfill "$f" "" "reconstructed:$n_claim/${n_sent:-0}"
     rebuilt=$((rebuilt + 1))
     log "PROVENANCE rebuilt for Keep/$base — $n_claim of ${n_sent:-0} sentence(s) recovered"
   done
@@ -1456,6 +1470,11 @@ generate() {
 write_candidates() {
   local tmp="$1" out="$2" written=0 rejected=0
   local today; today="$(date +%Y-%m-%d)"
+  # What the model was looking at, by content — the one identity that says two
+  # candidates were stitched from the same material. Cheap to record, and the
+  # only way a later comparison can tell "different variant" from "different day".
+  local corpus_sha
+  corpus_sha="$(blog_file_hash "$tmp/corpus.md" | cut -c1-12)"
 
   if grep -qx 'NO CANDIDATES' "$out"; then
     log "model proposed nothing this run"
@@ -1546,6 +1565,7 @@ write_candidates() {
         printf 'kind: %s\n' "$kind"
         printf 'title: %s\n' "$rtitle"
         printf 'created: %s\n' "$today"
+        prov_frontmatter "$PERSONA"
         printf 'rejected: %s\n' "$gate_line"
         printf 'sources:\n'
         for src in "${valid[@]}"; do printf '  - %s\n' "$src"; done
@@ -1555,6 +1575,9 @@ write_candidates() {
         printf '\n---\n\n## gate report\n\n'
         apply_aliases "$c.aliases" < "$c.prov"
       } > "$rdest"
+      # A rejection is a result too: a variant that gets everything rejected is
+      # a variant that failed, and that only shows up if the losses are counted.
+      prov_record rejected "$rdest" "$PERSONA" "corpus:$corpus_sha"
       log "REJECTED kept: $(basename "$rdest" .md)"
       continue
     fi
@@ -1570,11 +1593,16 @@ write_candidates() {
     [ -n "$slug" ] || slug="untitled"
     dest="$(dedup_md "$POSTS/${today}-${kind}-${slug}")"
 
+    # variant/persona/run go in the FRONTMATTER, not in a side file, because
+    # frontmatter is what survives the trip to the phone and the move into
+    # Keep/ — and that move is the datum the online scorer reads. The filename
+    # and the body stay unbranded, so reading the pool stays blind.
     {
       printf -- '---\n'
       printf 'kind: %s\n' "$kind"
       printf 'title: %s\n' "$title"
       printf 'created: %s\n' "$today"
+      prov_frontmatter "$PERSONA"
       printf 'sources:\n'
       for src in "${valid[@]}"; do printf '  - %s\n' "$src"; done
       printf -- '---\n\n'
@@ -1587,9 +1615,12 @@ write_candidates() {
     # are pre-alias, matching the (private) corpus, which is why .provenance/
     # is in sync/.stignore: laptop-only, never carried to the phone.
     {
-      printf '# provenance: %s\n\n' "$(basename "$dest" .md)"
+      printf '# provenance: %s\n' "$(basename "$dest" .md)"
+      prov_report_header "$PERSONA"
+      printf '\n'
       cat "$c.prov"
     } > "$PROVENANCE/$(basename "$dest" .md).md"
+    prov_record candidate "$dest" "$PERSONA" "corpus:$corpus_sha"
 
     rel="$(basename "$dest" .md)"
     # Join by hand: "${valid[*]}" plus tr would turn the spaces *inside* a

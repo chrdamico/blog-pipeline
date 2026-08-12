@@ -287,6 +287,37 @@ Guardrails worth knowing:
   lens each day (reuse holes fall differently, the over-budget sample rotates),
   so unchanged notes can still yield a stitching yesterday couldn't see.
 
+## Provenance
+
+Every artifact records the configuration that produced it — not only when an
+experiment is running. A run with no profile is still a variant; it is just the
+one called `default`. Three places carry the stamp, each chosen for how it
+survives:
+
+- **`drafts/<bundle>/meta.json`** — the full record beside the artifacts it
+  explains: run id, pipeline commit, config fingerprint and every resolved knob,
+  the model, each prompt by name *and* content hash (anchor and directive
+  included), the input by content hash (audio, verbatim), and what the transform
+  cost — chars in/out, wall clock, and **churn %**: the word-level edit distance
+  from `verbatim.md` to `cleaned.md`, as a share of their combined length. That
+  last number is how "did the looser cleanup prompt actually rewrite more?"
+  gets answered without reading a single diff by hand.
+- **Frontmatter** on every candidate post: `variant:`, `persona:`, `run:`.
+  Frontmatter because it survives the trip to the phone and the move into
+  `Keep/` — and that move is the datum the online scorer reads. The filename and
+  the body stay unbranded, so reading the pool stays blind.
+- **`logs/provenance.tsv`** — one row per artifact (timestamp, run, kind, path,
+  variant, persona, input hashes): what exists, and where it came from.
+  `logs/usage.tsv` keeps its own job as the per-call token ledger; the two join
+  on the run id.
+
+Provenance reports in `Posts/.provenance/` gain the same three keys plus the
+prompt hashes as a comment header. `bin/reclean.sh` re-stamps the bundles it
+touches (a recleaned `cleaned.md` was produced by *today's* configuration, and
+says so, while keeping its original `first_seen`), and a `Keep/` post whose
+report has to be reconstructed is honestly labelled `variant: pre-experiment`
+rather than being counted as whatever runs today.
+
 ## Statistics
 
 `bin/stats.sh` prints the pipeline at a glance: pool/Keep/Discarded/Rejected

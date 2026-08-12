@@ -49,6 +49,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # suggestions inside it) is invisible to this script.
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/provenance.sh
+. "$REPO_DIR/lib/provenance.sh"
 
 # Cleanup is a constrained voice-preserving transform — Sonnet handles it well
 # and burns less of the subscription. The curator (suggest.sh) uses Opus.
@@ -154,8 +156,18 @@ dedup_dest() {
 # Runs from work/ with FS/exec tools denied, so the transform cannot touch the
 # repo — it only reads stdin and writes stdout. Used for both the voice-
 # preserving cleanup and the optional structure suggestion.
+#
+# It also leaves the call's cost in LAST_IN_CHARS / LAST_OUT_CHARS /
+# LAST_SECONDS for the bundle's meta.json — set here rather than parsed back
+# out of the usage ledger, where a lookup would have to guess which row was ours.
+LAST_IN_CHARS=0
+LAST_OUT_CHARS=0
+LAST_SECONDS=0
+
 claude_transform() {
   local prompt_file="$1" in_file="$2" out_file="$3" rc=0
+  local started
+  started="$(date +%s)"
   # Feed the instructions AND the input as ONE stdin stream, delimited by
   # explicit markers, with no prompt argument. Passing the prompt as -p and the
   # text on stdin is ambiguous: claude sometimes ignores the piped input and
@@ -176,13 +188,17 @@ claude_transform() {
       > "$out_file" || rc=$?
   # Usage ledger (see bin/stats.sh): stream size in chars, reconstructed from
   # the parts (prompt + anchor + input; the markers are noise). ~4 chars/token.
-  local in_chars
+  local in_chars out_chars
   in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
   [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
+  out_chars="$(wc -c < "$out_file" | tr -d ' ')"
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "process:$(basename "$prompt_file" .md)" \
-    "$CLAUDE_MODEL" "$in_chars" "$(wc -c < "$out_file" | tr -d ' ')" \
-    >> "$LOGS/usage.tsv"
+    "$CLAUDE_MODEL" "$in_chars" "$out_chars" \
+    >> "$USAGE_TSV"
+  LAST_IN_CHARS="$in_chars"
+  LAST_OUT_CHARS="$out_chars"
+  LAST_SECONDS=$(( $(date +%s) - started ))
   return $rc
 }
 
@@ -231,6 +247,9 @@ process_one() {
     rm -rf "$tmp"
     return 1
   fi
+  # Kept before the optional structure call below overwrites them: what meta.json
+  # reports is the cost of the CLEANUP, which is the transform under study.
+  local clean_in="$LAST_IN_CHARS" clean_out="$LAST_OUT_CHARS" clean_secs="$LAST_SECONDS"
 
   # Safety net: the ⟦unsure⟧ confidence marks (see transcribe.sh) live in
   # verbatim.md only; the prompt tells the cleaner to resolve them, and this
@@ -278,6 +297,16 @@ process_one() {
     return 1
   fi
   rm -rf "$tmp"
+
+  # 5a. meta.json: which configuration produced this bundle, what went into it,
+  #     and how much of the text the cleanup actually moved. Written for every
+  #     bundle, experiment or not — a run with no profile is still a variant,
+  #     it is just the one called `default`. A bundle without meta.json is one
+  #     that predates this step (see lib/provenance.sh).
+  prov_write_meta "$dest" process "$audio" "$hash" \
+    "$dest/verbatim.md" "$dest/cleaned.md" \
+    "$clean_in" "$clean_out" "$clean_secs"
+  prov_record draft "$dest" "" "audio:${hash:0:12},verbatim:$(blog_file_hash "$dest/verbatim.md" | cut -c1-12)"
 
   # 5b. the transcript, next to the recording in sync/, sharing its basename so
   #     the pair is obvious in a file browser and is reaped together. Derived
