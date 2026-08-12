@@ -90,11 +90,17 @@ blog-pipeline/
 │   ├── note.sh        # text-note capture from the terminal (writes the vault)
 │   ├── reclean.sh     # re-run cleanup over existing bundles (prompt upgrades)
 │   ├── stats.sh       # the pipeline at a glance; writes STATS.md
+│   ├── ab.sh          # the experiment runner (offline A/B in sandboxes)
+│   ├── ab-transcribe.sh # frozen/cached transcripts for experiments
+│   ├── score.sh       # the online metric: what you moved into Keep/
 │   └── notify.sh      # notify-send / osascript wrapper
 ├── lib/
 │   └── config.sh      # every path, prompt, model and knob, resolved in one place
-├── profiles/
-│   └── default.env    # the full inventory of knobs, at their defaults
+├── profiles/          # variants: one profile per experiment, plus
+│   ├── default.env    #   the full inventory of knobs, at their defaults
+│   ├── directives/    #   the third prompt slot: what THIS run wants
+│   ├── personas/      #   name -> directive, for a multi-voice pool
+│   └── overlays/      #   prompt overlays (only the files they change)
 ├── prompts/
 │   ├── cleanup.md      # voice-preserving cleanup prompt
 │   ├── structure.md    # optional outline-suggestion prompt
@@ -102,10 +108,14 @@ blog-pipeline/
 │   ├── curate.md       # choose the best N-subset of an overflowing pool
 │   ├── names.md        # the name scout: list person names to anonymize
 │   ├── typos.md        # proofread a typed note: spelling only, nothing else
+│   ├── judge-*.md      # the optional pairwise judge tier (bin/ab.sh judge)
 │   └── style-anchor.example.md # template: copy to style-anchor.md (gitignored) + add your writing
+├── eval/
+│   └── experiments/   # A/B definitions; the rest of eval/ is gitignored data
 ├── tests/             # check_privacy.sh: nothing personal is ever committed
 │                      # check_typo_gate.sh: the typo pass only respells words
 │                      # check_defaults.sh: the config layer changes nothing
+│                      # check_gate.sh: the gate's experiment seams change no verdict
 ├── .githooks/         # pre-commit hook running that check (wired by install.sh)
 ├── watcher/           # systemd user units + (untested) macOS launchd plists
 ├── sync/              # THE Syncthing folder (the phone calls it /blog)
@@ -317,6 +327,82 @@ touches (a recleaned `cleaned.md` was produced by *today's* configuration, and
 says so, while keeping its original `first_seen`), and a `Keep/` post whose
 report has to be reconstructed is honestly labelled `variant: pre-experiment`
 rather than being counted as whatever runs today.
+
+## Experiments (`bin/ab.sh`)
+
+Two ways to find out whether a change is an improvement, and they answer
+different questions.
+
+### Offline: replay a frozen corpus
+
+```sh
+bin/ab.sh freeze                  # once: fixtures from your own bundles + the vault
+bin/ab.sh list                    # what fixtures and experiments exist
+bin/ab.sh run curator-model       # variant × fixture × repetition, each in a sandbox
+bin/ab.sh report curator-model    # eval/runs/<exp>/REPORT.md
+bin/ab.sh promote curator-model opus
+```
+
+Every run happens under its own `BLOG_ROOT`, so nothing an experiment does can
+reach `drafts/`, `processed.tsv`, the alias map or the phone. Fixtures are real
+memos with their transcripts **frozen** beside them — an experiment about
+prompts must not also be an experiment about what whisper heard that morning —
+plus a snapshot of the vault, because `suggest.sh` is stateful and two variants
+reading different pool histories are not being compared. `bin/ab-transcribe.sh`
+answers from the frozen transcript or a content-hashed cache, so whisper runs
+once per recording, ever.
+
+An experiment is a small file in `eval/experiments/` naming the stage, the
+repetitions, and the variants (each a profile, optionally with extra
+environment). Five ship, one per motivating question: `cleanup-licence`,
+`curator-model`, `curator-prompt`, `personas`, `curator-licence`.
+
+`REPORT.md` has a **mechanical tier** — free, deterministic, computed from the
+artifacts the pipeline writes anyway: churn %, length, `⟦unsure⟧` leaks, gate
+pass rate and per-sentence class counts, pool composition, tokens, wall clock —
+as one row per (variant, fixture, rep), then means with the **observed range**
+beside them. Read the spread first: Claude is not deterministic, and two
+variants whose ranges overlap have not been told apart, whatever their averages
+say. Below that: the literal before/after (word diffs for the cleanup stage,
+each variant's pool and gate verdicts for the curator stage), and what the whole
+thing burned.
+
+`bin/ab.sh judge` adds an optional pairwise tier — blinded, judged twice with
+the positions swapped, on a pinned model that is never one of the models under
+test (`prompts/judge-*.md`). It is manual because it burns subscription and its
+answer is softer than it looks.
+
+### Online: what you actually kept
+
+```sh
+bin/ab.sh score              # per variant
+bin/ab.sh score --personas   # per persona
+bin/ab.sh score --posts      # one line per post
+```
+
+For curator-side questions no sandbox judge knows your taste. The honest signal
+is what you move into `Posts/Keep/` on the phone — a decision you are already
+making, for free, every morning. Since every candidate carries its `variant:`
+and `persona:`, those decisions can be counted per variant without changing
+anything about how you read: `score.sh` joins the tree with
+`logs/provenance.tsv` and reports proposals, gate rejections, where the survivors
+are now, the share of *decided* posts you kept, and mean days from writing to
+eviction.
+
+Two ways to get more than one variant in front of you:
+
+- **within a run** — `PERSONAS` splits `MAX_NEW` between voices, so one morning's
+  pool mixes them, and the filename and body stay unbranded;
+- **across days** — alternate `BLOG_PROFILE` between runs. Every post is stamped
+  with the variant that made it, so the join works either way.
+
+Nothing about your reading flow changes, and neither does the answer's honesty:
+`kept%` counts only posts you have decided about — a post still sitting in the
+pool is undecided and is counted for neither side.
+
+`eval/` is gitignored except the experiment definitions: fixtures are your memos
+and your vault, copied, and run outputs are posts stitched out of them.
+`tests/check_privacy.sh` enforces that too.
 
 ## Statistics
 

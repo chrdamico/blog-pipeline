@@ -1,0 +1,16 @@
+# Experiment 4 — what does the curator do with more rope?
+#
+# SANDBOX ONLY, and the one experiment that suspends the pipeline's central
+# rule: the loose variant runs with GATE_MODE=report, so nothing it writes is
+# rejected for being written rather than stitched.
+#
+# The result to read is not the pass rate — the gate is not enforcing — but the
+# per-sentence classification in each run's provenance reports, where every
+# non-verbatim sentence carries its nearest source note and a word diff. That
+# is the evidence for "it edited a seam" versus "it wrote a paragraph".
+STAGE=suggest
+REPS=3
+VARIANTS="strict loose"
+VARIANT_strict_PROFILE=default
+VARIANT_strict_ENV="GATE_TRACE=1"
+VARIANT_loose_PROFILE=curator-loose

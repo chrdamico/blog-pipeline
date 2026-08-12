@@ -1,0 +1,14 @@
+# Experiment 3 — two voices proposing into one pool.
+#
+# Offline this answers the mechanical half: whether both personas can stitch
+# within the contract at all, what each one's gate profile looks like, and
+# whether they simply propose the same convergences twice.
+#
+# It does NOT answer which voice you prefer — nothing in a sandbox does. For
+# that, run profiles/personas.env live for a few weeks and then `bin/ab.sh
+# score`, which counts what you moved into Keep/.
+STAGE=suggest
+REPS=3
+VARIANTS="single two_voices"
+VARIANT_single_PROFILE=default
+VARIANT_two_voices_PROFILE=personas

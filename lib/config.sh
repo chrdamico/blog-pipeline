@@ -231,7 +231,11 @@ GATE_TRACE="${GATE_TRACE:-0}"
 
 NAME_SCAN="${NAME_SCAN:-1}"
 SELF_NAME="${SELF_NAME:-Christian}"
-ALIASES="${ALIASES:-$BLOG_REPO_DIR/private/aliases.tsv}"
+# Under BLOG_ROOT, not the code root: an experiment that re-roots the tree must
+# not extend the live alias map through the name scout. A sandbox gets its own
+# copy (bin/ab.sh seeds one), and the live run is unaffected because BLOG_ROOT
+# is the repo.
+ALIASES="${ALIASES:-$BLOG_ROOT/private/aliases.tsv}"
 RESERVE_F="${RESERVE_F:-Judith Helena Ronja Merle Frida Carla Teresa Bianca Sofia Irene Livia Paola Zoe Selin Aylin Esra Noemi Linnea Greta Elif Sanne Rosa Alma Leonie Tilda Edith Runa Amara}"
 RESERVE_M="${RESERVE_M:-Anton Bruno Dario Fabio Georg Henrik Ivo Kilian Lorenz Matteo Nils Oskar Pavel Quentin Ruben Stefan Tobias Umberto Wim Yannick Aldo Boris Cem Darius Enzo Farid}"
 RESERVE_X="${RESERVE_X:-Kim Luca Toni Micha Rowan Sage Noor Eli}"

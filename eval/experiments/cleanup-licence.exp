@@ -1,0 +1,16 @@
+# Experiment 5 — how much more does a looser cleanup actually rewrite?
+#
+# The cheapest of the five to answer honestly, because the answer is a number
+# the pipeline already computes: churn_pct in each bundle's meta.json, the
+# word-level distance from verbatim.md to cleaned.md. The report puts the two
+# variants' churn side by side, and the word diff under "side by side" is the
+# literal before/after on the same recording.
+#
+#   bin/ab.sh freeze          # once: fixtures from your own bundles
+#   bin/ab.sh run cleanup-licence
+STAGE=process
+REPS=3
+FIXTURES_SET=all
+VARIANTS="baseline loose"
+VARIANT_baseline_PROFILE=default
+VARIANT_loose_PROFILE=cleanup-loose

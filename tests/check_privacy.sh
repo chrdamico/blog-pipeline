@@ -26,13 +26,20 @@ bad=$(git ls-files -- 'sync/' 'drafts/' 'logs/' 'work/' 'private/' 'models/' \
 [ -z "$bad" ] || err "tracked file(s) in a private path:
 $bad"
 
+# 1b. eval/ is personal too — fixtures are your memos and your vault, copied,
+# and run outputs are posts stitched out of them. Only the experiment
+# DEFINITIONS (and this exception) are code.
+bad=$(git ls-files -- 'eval/' | grep -v '^eval/experiments/' || true)
+[ -z "$bad" ] || err "tracked file(s) under eval/ that are not experiment definitions:
+$bad"
+
 # 2. no audio, anywhere
 bad=$(git ls-files | grep -iE '\.(wav|m4a|mp3|opus|ogg|flac|aac|wma)$' || true)
 [ -z "$bad" ] || err "audio file(s) tracked:
 $bad"
 
 # 3. the guard itself must stay intact
-for pat in 'sync/' 'drafts/' 'logs/' 'work/' 'private/' 'models/' \
+for pat in 'sync/' 'drafts/' 'logs/' 'work/' 'private/' 'models/' 'eval/*' \
            'prompts/style-anchor.md' 'PLAN.md' '*.wav' '*.m4a' '*.mp3' \
            '*.opus' '*.ogg' '*.flac'; do
   grep -qxF "$pat" .gitignore || err ".gitignore no longer contains '$pat'"

@@ -1,0 +1,11 @@
+# Experiment 2 — an edited generation prompt.
+#
+# Put your rewritten suggest.md in profiles/overlays/curator-prompt/ first; an
+# empty overlay resolves to the shipped prompts, and the report will show both
+# variants with the SAME fingerprint, which is the honest way for it to say
+# "you have not changed anything yet".
+STAGE=suggest
+REPS=3
+VARIANTS="shipped edited"
+VARIANT_shipped_PROFILE=default
+VARIANT_edited_PROFILE=curator-prompt

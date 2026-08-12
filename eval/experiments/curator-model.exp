@@ -1,0 +1,10 @@
+# Experiment 1 — does the curator have to be Opus?
+#
+# One line of profile between the variants. Watch the gate columns as much as
+# the cost ones: a cheaper model that stitches less faithfully shows up as more
+# glue and more rejections, and that is the thing that would actually cost you.
+STAGE=suggest
+REPS=3
+VARIANTS="opus sonnet"
+VARIANT_opus_PROFILE=default
+VARIANT_sonnet_PROFILE=curator-sonnet

@@ -12,6 +12,11 @@ private/
 prompts/style-anchor.md
 # local design/handoff notes, not part of the public repo
 PLAN.md
+PLAN-AB.md
+# Experiment fixtures and run outputs are your notes and your posts, copied.
+# The experiment DEFINITIONS are code and stay in git — hence the exception.
+eval/*
+!eval/experiments/
 
 # Large local artifacts
 models/
