@@ -414,6 +414,40 @@ a profileless run still resolves to exactly the numbers below.
   where acronyms and shorthand live (`wbe`, `tbh`).
 - `TYPO_MAX_PCT` (5) — most of a note a single pass may change, minimum 3 words.
   Above it the whole note is rejected: that is a rewrite, not proofreading.
+- `GATE_MODE` (`enforce`) — `report` makes the stitching gate classify without
+  ever rejecting. That is how the pipeline's central rule gets switched off, so
+  it belongs in a sandbox: a variant told to rewrite more is otherwise wiped out
+  by its own gate and the experiment measures nothing. The summary line says
+  out loud what the verdict would have been, and `logs/gate.tsv` keeps it.
+- `GATE_TRACE` (0) — annotate every tweaked/glue/new sentence in the provenance
+  report with its nearest corpus sentence and a word-level diff, so you can read
+  exactly what the model wrote rather than stitched. Forced on by `report` mode.
+
+### Variants (`profiles/`)
+
+A variant is a profile plus, optionally, a prompt overlay and a directive.
+Directives are the third slot in every prompt assembly — *instructions + style
+anchor + directive + input* — a small free-text file saying something this run
+wants that the shared prompt does not (`CLEANUP_DIRECTIVE`, `CURATE_DIRECTIVE`).
+An empty directive changes the stream by not one byte, which is why the default
+run is unaffected.
+
+`PERSONAS=<tsv>` (`name <TAB> directive-file`) is the fan-out: generation runs
+once per persona with `MAX_NEW` split between them, and every candidate is
+stamped with `persona:`. One pool, several voices, and nothing in the filename
+or the body says which is which — so the pool reads exactly as it always did and
+what you move into `Keep/` is the verdict.
+
+Shipped, one per motivating experiment:
+
+| profile | what it changes |
+| --- | --- |
+| `default` | nothing — the documented inventory of every knob |
+| `curator-sonnet` | the curator's model (one line) |
+| `curator-prompt` | an overlay directory for an edited `suggest.md` |
+| `personas` | two voices sharing one pool's allowance |
+| `curator-loose` | `GATE_MODE=report` + a directive licensing seam edits — **sandbox only** |
+| `cleanup-loose` | a directive licensing sentence-internal repair at cleanup |
 
 ## Status
 

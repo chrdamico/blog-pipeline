@@ -264,11 +264,30 @@ claude_call() {
 # max(1, (100-VERBATIM_MIN)% of its sentences) GLUE ones. The per-sentence
 # classification doubles as the provenance report.
 #
+# Two knobs, both for experiments and neither of them touching the arithmetic
+# above:
+#
+#   GATE_MODE=report   classify, but never reject. A variant told to rewrite
+#                      more would otherwise have every candidate killed by this
+#                      gate, and an experiment that produces nothing measures
+#                      nothing. It is also how the stitch-only pillar gets
+#                      switched off, so it belongs in a sandbox and nowhere else.
+#   GATE_TRACE=1       annotate every TWEAKED/GLUE/NEW sentence with its nearest
+#                      corpus sentence and a word diff (forced on in report
+#                      mode). The counts alone say how much was rewritten; this
+#                      says exactly WHAT — which is the evaluation data for any
+#                      question about rewriting. VERBATIM lines need no diff:
+#                      they are the source, character for character.
+#
+# The annotation is an extra `  ~ ...` line under the sentence it belongs to, so
+# the report's classification lines keep the shape everything else reads them by
+# (build_claimed takes VERBATIM/TWEAKED, the last line stays the verdict).
+#
 # $1 = body file, $2 = corpus file (with "### NOTE id=" markers). The report
 # goes to stdout; the exit status is the verdict.
 verbatim_gate() {
   awk -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" \
-      -v new_every="$NEW_SLACK_EVERY" '
+      -v new_every="$NEW_SLACK_EVERY" -v mode="$GATE_MODE" -v trace="$GATE_TRACE" '
     function norm(s) {
       gsub(/[\342\200\230\342\200\231]/, "\x27", s)   # curly apostrophes
       gsub(/[\342\200\234\342\200\235]/, "\"", s)     # curly double quotes
@@ -295,6 +314,70 @@ verbatim_gate() {
         }
       }
       return ""
+    }
+    # --- tracing: which corpus sentence is this one a rewrite OF? ---------------
+    # Split every note into sentences once, then score a candidate sentence
+    # against all of them by shared words (intersection over union). Only built
+    # when tracing is on: it is the expensive half of this gate.
+    function build_index(   i, k, m, parts, t) {
+      for (i = 1; i <= nids; i++) {
+        t = ntext[ids[i]]
+        gsub(/[.!?] /, "&\n", t)
+        m = split(t, parts, "\n")
+        for (k = 1; k <= m; k++) {
+          if (length(parts[k]) < 16) continue
+          csent[++nsent] = parts[k]; csrc[nsent] = ids[i]
+        }
+      }
+    }
+    function similarity(a, b,   wa, wb, na, nb, i, seen, common, union) {
+      na = split(a, wa, " "); nb = split(b, wb, " ")
+      delete seen
+      for (i = 1; i <= na; i++) seen[wa[i]] = 1
+      common = 0
+      delete seen2
+      for (i = 1; i <= nb; i++) {
+        if (wb[i] in seen2) continue
+        seen2[wb[i]] = 1
+        if (wb[i] in seen) common++
+      }
+      union = 0
+      for (i in seen) union++
+      for (i in seen2) if (!(i in seen)) union++
+      return union ? common / union : 0
+    }
+    # A word-level diff of two sentences, in the same shape git word-diff uses:
+    # [-dropped-] {+added+}. LCS over two ~20-word sequences, which is nothing.
+    function word_diff(a, b,   wa, wb, na, nb, i, j, L, out) {
+      na = split(a, wa, " "); nb = split(b, wb, " ")
+      for (i = 0; i <= na; i++) L[i, 0] = 0
+      for (j = 0; j <= nb; j++) L[0, j] = 0
+      for (i = 1; i <= na; i++) for (j = 1; j <= nb; j++)
+        L[i, j] = (wa[i] == wb[j]) ? L[i - 1, j - 1] + 1 \
+                  : (L[i - 1, j] >= L[i, j - 1] ? L[i - 1, j] : L[i, j - 1])
+      i = na; j = nb; out = ""
+      while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && wa[i] == wb[j])            { out = wa[i] " " out; i--; j-- }
+        else if (j > 0 && (i == 0 || L[i, j - 1] >= L[i - 1, j])) { out = "{+" wb[j] "+} " out; j-- }
+        else                                             { out = "[-" wa[i] "-] " out; i-- }
+      }
+      sub(/ $/, "", out)
+      return out
+    }
+    # The annotation line under a non-verbatim sentence.
+    function annotate(s,   i, sim, best, bi) {
+      if (!trace) return
+      if (!indexed) { build_index(); indexed = 1 }
+      best = 0; bi = 0
+      for (i = 1; i <= nsent; i++) {
+        sim = similarity(s, csent[i])
+        if (sim > best) { best = sim; bi = i }
+      }
+      if (bi == 0 || best < 0.3) {
+        printf "  ~ nearest   (nothing in the corpus above 30%% — this sentence is the model'"'"'s)\n"
+        return
+      }
+      printf "  ~ nearest   [%s] %d%%: %s\n", csrc[bi], best * 100 + 0.5, word_diff(csent[bi], s)
     }
     NR == FNR {   # first file: the corpus, keyed by note id
       if ($0 ~ /^### NOTE id=/) { id = substr($0, 13); ids[++nids] = id; next }
@@ -325,11 +408,11 @@ verbatim_gate() {
         if (src != "") {
           verbatim++; printf "- VERBATIM [%s] %s\n", src, d
         } else if ((src = tweaked_source_of(s)) != "") {
-          tweaked++;  printf "- TWEAKED  [%s] %s\n", src, d
+          tweaked++;  printf "- TWEAKED  [%s] %s\n", src, d; annotate(s)
         } else if (split(s, wtmp, " ") <= glue_max) {
-          glue++;     printf "- GLUE     %s\n", d
+          glue++;     printf "- GLUE     %s\n", d; annotate(s)
         } else {
-          new_++;     printf "- NEW      %s\n", d
+          new_++;     printf "- NEW      %s\n", d; annotate(s)
         }
       }
       allowed_glue = int(counted * (100 - min_pct) / 100)
@@ -340,8 +423,19 @@ verbatim_gate() {
       # 46 it is noise the author will delete on review.
       allowed_new = int(counted / new_every)
       pass = (counted > 0 && new_ <= allowed_new && glue <= allowed_glue)
-      printf "\ngate: %s — %d verbatim, %d tweaked, %d glue (max %d), %d new (max %d) of %d sentences\n",
-             pass ? "PASS" : "FAIL", verbatim, tweaked, glue, allowed_glue, new_, allowed_new, counted
+      # Report mode never rejects — but it never lies about it either: the
+      # verdict word stays PASS (that is what the script acts on) and the line
+      # says out loud that enforcement was off and what would have happened.
+      # logs/gate.tsv keeps the whole line, so a report-mode run is still
+      # countable afterwards.
+      note = ""
+      if (mode == "report") {
+        note = pass ? "  [report mode: enforcement off]" \
+                    : "  [report mode: enforcement off — would have FAILED]"
+        pass = 1
+      }
+      printf "\ngate: %s — %d verbatim, %d tweaked, %d glue (max %d), %d new (max %d) of %d sentences%s\n",
+             pass ? "PASS" : "FAIL", verbatim, tweaked, glue, allowed_glue, new_, allowed_new, counted, note
       exit pass ? 0 : 1
     }' "$2" "$1"
 }
@@ -1384,14 +1478,26 @@ pool_inventory() {
 }
 
 # --- generate ---------------------------------------------------------------
+# One generation call. With no personas configured there is exactly one, with
+# an empty name and CURATE_DIRECTIVE (usually empty too) in the directive slot —
+# byte for byte the call this script has always made.
+#
+#   $1 tmp  $2 inventory  $3 slot  $4 persona name  $5 directive file  $6 quota
+#
+# Echoes the path of the output file; non-zero means the call failed.
 generate() {
-  local tmp="$1" inventory="$2"
-  local stream="$tmp/gen.in" out="$tmp/gen.out" n_res_all n_res
+  local tmp="$1" inventory="$2" slot="$3" persona="$4" directive="$5" quota="$6"
+  local stream="$tmp/gen.$slot.in" out="$tmp/gen.$slot.out" n_res_all n_res
 
   {
     cat "$SUGGEST_PROMPT"
     if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
-    printf '\n\nMAX NEW: %s\n' "$MAX_NEW"
+    # The directive slot: instructions + anchor + DIRECTIVE + input. A persona
+    # is a directive ("choose and order as author X would"), not a prompt fork —
+    # so every persona is still bound by the same stitching contract, and the
+    # gate still measures all of them the same way.
+    if [ -n "$directive" ] && [ -f "$directive" ]; then printf '\n\n'; cat "$directive"; fi
+    printf '\n\nMAX NEW: %s\n' "$quota"
 
     printf '\n===== BEGIN CORPUS =====\n'
     cat "$tmp/corpus.md"
@@ -1455,20 +1561,70 @@ generate() {
   } > "$stream"
 
   if ! claude_call "$stream" "$out" 2>>"$SUGGEST_LOG"; then
-    log "ERROR generation call failed"
+    log "ERROR generation call failed${persona:+ (persona $persona)}"
     return 1
   fi
   if [ ! -s "$out" ]; then
-    log "ERROR generation produced no output"
+    log "ERROR generation produced no output${persona:+ (persona $persona)}"
     return 1
   fi
   printf '%s' "$out"
 }
 
+# --- personas -----------------------------------------------------------------
+# PERSONAS is a TSV of `name <TAB> directive-file`. When it is set, generation
+# runs once per persona with MAX_NEW split between them, and every candidate
+# carries the persona that produced it — one pool, several voices, and you judge
+# them blind because nothing in the filename or the body says which is which.
+# Unset = one anonymous persona = today's single call.
+#
+# The personas do not see each other's output, so two of them can land on the
+# same convergence. That is the same churn the pool cap, the history section and
+# the curator already absorb — and telling them apart is exactly the point.
+PERSONA_NAMES=()
+PERSONA_FILES=()
+PERSONA_QUOTAS=()
+
+load_personas() {
+  local n f
+  PERSONA_NAMES=(); PERSONA_FILES=()
+  while IFS=$'\t' read -r n f; do
+    [ -n "${n:-}" ] || continue
+    f="$(blog_persona_path "$f")"
+    if [ ! -f "$f" ]; then
+      log "WARN persona '$n': no directive file at $f — skipped"
+      continue
+    fi
+    PERSONA_NAMES+=("$n"); PERSONA_FILES+=("$f")
+  done < <(blog_persona_rows)
+
+  if [ "${#PERSONA_NAMES[@]}" -eq 0 ]; then
+    [ -z "$PERSONAS" ] || log "WARN PERSONAS=$PERSONAS yielded no usable rows — running unsplit"
+    PERSONA_NAMES=(""); PERSONA_FILES=("$CURATE_DIRECTIVE")
+  fi
+
+  # Split MAX_NEW between them, remainder to the earliest — so with MAX_NEW=8
+  # and three personas the shares are 3, 3, 2 and the pool stays capped at 8.
+  local n_p="${#PERSONA_NAMES[@]}" i base rest
+  base=$((MAX_NEW / n_p)); rest=$((MAX_NEW % n_p))
+  PERSONA_QUOTAS=()
+  for ((i = 0; i < n_p; i++)); do
+    PERSONA_QUOTAS+=( $(( base + (i < rest ? 1 : 0) )) )
+  done
+  [ "$n_p" -eq 1 ] || log "personas: ${PERSONA_NAMES[*]} — MAX_NEW=$MAX_NEW split ${PERSONA_QUOTAS[*]}"
+}
+
 # Split the model's output into one file per candidate and write the accepted
-# ones into the pool. Echoes the number written.
+# ones into the pool. Echoes "<written> <rejected>".
+#
+#   $1 tmp  $2 generation output  $3 slot  $4 this persona's quota
+#   $5 how many posts earlier personas already wrote (the global MAX_NEW budget)
+#
+# The slot keeps two personas' candidate files apart in the same scratch dir;
+# with no personas it is 1 and nothing else changes.
 write_candidates() {
-  local tmp="$1" out="$2" written=0 rejected=0
+  local tmp="$1" out="$2" slot="${3:-1}" quota="${4:-$MAX_NEW}" already="${5:-0}"
+  local written=0 rejected=0
   local today; today="$(date +%Y-%m-%d)"
   # What the model was looking at, by content — the one identity that says two
   # candidates were stitched from the same material. Cheap to record, and the
@@ -1477,22 +1633,22 @@ write_candidates() {
   corpus_sha="$(blog_file_hash "$tmp/corpus.md" | cut -c1-12)"
 
   if grep -qx 'NO CANDIDATES' "$out"; then
-    log "model proposed nothing this run"
+    log "model proposed nothing this run${PERSONA:+ (persona $PERSONA)}"
     printf '0 0'
     return 0
   fi
 
-  awk -v d="$tmp" '
-    /^===== POST =====[[:space:]]*$/  { n++; f = sprintf("%s/cand.%03d", d, n); inp = 1; next }
+  awk -v d="$tmp" -v slot="$slot" '
+    /^===== POST =====[[:space:]]*$/  { n++; f = sprintf("%s/cand.%s.%03d", d, slot, n); inp = 1; next }
     /^===== END POST =====[[:space:]]*$/ { inp = 0; next }
     inp && f { print > f }
   ' "$out"
 
   local c kind title sources dest slug src rel
   shopt -s nullglob
-  for c in "$tmp"/cand.*; do
-    if [ "$written" -ge "$MAX_NEW" ]; then
-      log "WARN model proposed more than MAX_NEW=$MAX_NEW; ignoring the rest"
+  for c in "$tmp"/cand."$slot".*; do
+    if [ "$written" -ge "$quota" ] || [ "$((already + written))" -ge "$MAX_NEW" ]; then
+      log "WARN model proposed more than its allowance ($quota); ignoring the rest"
       break
     fi
 
@@ -1797,22 +1953,44 @@ main() {
   # over-budget sample rotates), so identical notes can still yield a stitching
   # yesterday's run couldn't see; the pool cap, HISTORY and the curator absorb
   # any churn. One Claude call a day is the price of serendipity.
-  local out counts written=0 rejected=0 gen_failed=0
-  if out="$(generate "$tmp" "$inventory")"; then
+  local counts written=0 rejected=0 gen_failed=0
+  local i out outs=() slots=()
+  load_personas
+  for ((i = 0; i < ${#PERSONA_NAMES[@]}; i++)); do
+    if out="$(generate "$tmp" "$inventory" "$((i + 1))" \
+                "${PERSONA_NAMES[i]}" "${PERSONA_FILES[i]}" "${PERSONA_QUOTAS[i]}")"; then
+      outs+=("$out"); slots+=("$i")
+    else
+      # One persona failing is not the run failing: the others still produced
+      # candidates, and a retry would re-run them too. Only a run that generated
+      # NOTHING is worth another timer slot.
+      log "WARN generation failed for persona '${PERSONA_NAMES[i]:-(default)}' — continuing"
+    fi
+  done
+
+  if [ "${#outs[@]}" -eq 0 ]; then
+    gen_failed=1
+    log "WARN generation failed; curating the existing pool anyway"
+  else
     # Name scout before anything is written: a new person in the notes gets an
     # alias row NOW, so the very post that introduces them is already covered.
     # Failure withholds all candidates (fail closed) and the timer retries.
-    if extend_aliases "$tmp" "$out"; then
-      counts="$(write_candidates "$tmp" "$out")"
-      written="${counts%% *}"
-      rejected="${counts##* }"
+    # One call over ALL personas' output — the scout reads names, and names do
+    # not care which voice proposed them.
+    cat "${outs[@]}" > "$tmp/gen.all"
+    if extend_aliases "$tmp" "$tmp/gen.all"; then
+      for ((i = 0; i < ${#outs[@]}; i++)); do
+        PERSONA="${PERSONA_NAMES[${slots[i]}]}"
+        counts="$(write_candidates "$tmp" "${outs[i]}" "$((${slots[i]} + 1))" \
+                    "${PERSONA_QUOTAS[${slots[i]}]}" "$written")"
+        written=$((written + ${counts%% *}))
+        rejected=$((rejected + ${counts##* }))
+      done
+      PERSONA=""
     else
       gen_failed=1
       log "WARN name scout failed; candidates withheld, curating the pool anyway"
     fi
-  else
-    gen_failed=1
-    log "WARN generation failed; curating the existing pool anyway"
   fi
 
   curate_kind long  "$MAX_LONG"  "$tmp"

@@ -85,6 +85,10 @@ claude_transform() {
   {
     cat "$prompt_file"
     if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
+    # Same third slot as process.sh: instructions + anchor + directive + input.
+    if [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ]; then
+      printf '\n\n'; cat "$CLEANUP_DIRECTIVE"
+    fi
     printf '\n\n===== BEGIN INPUT (process ONLY the text between the markers; output nothing else) =====\n'
     cat "$in_file"
     printf '\n===== END INPUT =====\n'
@@ -96,6 +100,8 @@ claude_transform() {
   local in_chars out_chars
   in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
   [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
+  [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ] \
+    && in_chars=$((in_chars + $(wc -c < "$CLEANUP_DIRECTIVE")))
   out_chars="$(wc -c < "$out_file" | tr -d ' ')"
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "reclean:$(basename "$prompt_file" .md)" \

@@ -178,6 +178,13 @@ claude_transform() {
     # The style anchor is one file read by every step (see prompts/style-anchor.md),
     # appended after the instructions and before the input markers.
     if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
+    # The directive slot: instructions + anchor + DIRECTIVE + input. A small
+    # free-text file saying something this run wants that the shared prompt does
+    # not — "repair more inside sentences", say. Empty by default, and an empty
+    # directive changes the stream by not one byte.
+    if [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ]; then
+      printf '\n\n'; cat "$CLEANUP_DIRECTIVE"
+    fi
     printf '\n\n===== BEGIN INPUT (process ONLY the text between the markers; output nothing else) =====\n'
     cat "$in_file"
     printf '\n===== END INPUT =====\n'
@@ -191,6 +198,8 @@ claude_transform() {
   local in_chars out_chars
   in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
   [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
+  [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ] \
+    && in_chars=$((in_chars + $(wc -c < "$CLEANUP_DIRECTIVE")))
   out_chars="$(wc -c < "$out_file" | tr -d ' ')"
   printf '%s\t%s\t%s\t%s\t%s\n' \
     "$(date '+%Y-%m-%dT%H:%M:%S%z')" "process:$(basename "$prompt_file" .md)" \

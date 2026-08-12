@@ -1,0 +1,8 @@
+# name <TAB> directive file (relative to this file)
+#
+# Two voices in one pool: MAX_NEW is split between them, every candidate is
+# stamped with the persona that produced it, and nothing in the filename or the
+# body says which is which — so you judge them blind and bin/ab.sh score counts
+# what you kept.
+spare	spare.md
+circling	circling.md
