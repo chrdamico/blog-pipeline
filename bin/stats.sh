@@ -18,6 +18,41 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOGS="$REPO_DIR/logs"
 VAULT="$REPO_DIR/sync/Obsidian"
 POSTS="$VAULT/Posts"
+STATS_MD="$REPO_DIR/STATS.md"
+
+# --public omits post titles. logs/gate.tsv stores them PRE-alias (the gate runs
+# before anonymization), so a title can carry a real name — fine for the local
+# view, never for anything that gets committed. --write is the committed view:
+# STATS.md in the repo root, regenerated at the end of every suggest run.
+PUBLIC=0
+WRITE=0
+for arg in "$@"; do
+  case "$arg" in
+    --public) PUBLIC=1 ;;
+    --write)  WRITE=1 ;;
+    -h|--help)
+      printf 'usage: stats.sh [--public] [--write]\n'
+      printf '  --public  omit post titles (they are pre-alias; may contain real names)\n'
+      printf '  --write   write the public view to STATS.md in the repo root\n'
+      exit 0 ;;
+    *) printf 'stats.sh: unknown option: %s\n' "$arg" >&2; exit 2 ;;
+  esac
+done
+
+if [ "$WRITE" -eq 1 ]; then
+  tmp="$STATS_MD.tmp.$$"
+  {
+    printf '# Pipeline statistics\n\n'
+    printf 'Generated %s by `bin/stats.sh --write`, which runs at the end of every\n' "$(date '+%Y-%m-%d %H:%M %Z')"
+    printf 'suggest run. Post titles are omitted here on purpose — see `bin/stats.sh`\n'
+    printf 'for the full local view, and `logs/stats/` for one snapshot per day.\n\n'
+    printf '```\n'
+    "$0" --public
+    printf '```\n'
+  } > "$tmp"
+  mv "$tmp" "$STATS_MD"
+  exit 0
+fi
 
 count() { find "$1" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) 2>/dev/null | wc -l | tr -d ' '; }
 
@@ -51,7 +86,12 @@ if [ -s "$LOGS/gate.tsv" ]; then
              total, pass, total - pass, total ? pass * 100 / total : 0
     }' "$LOGS/gate.tsv"
   printf 'last rejections:\n'
-  awk -F'\t' '$2 == "REJECTED" { print "  - [" $3 "] " $4 }' "$LOGS/gate.tsv" | tail -n 5
+  if [ "$PUBLIC" -eq 1 ]; then
+    # Reason only: the counts carry the useful signal and no name can hide in them.
+    awk -F'\t' '$2 == "REJECTED" { print "  - [" $3 "] " $5 }' "$LOGS/gate.tsv" | tail -n 5
+  else
+    awk -F'\t' '$2 == "REJECTED" { print "  - [" $3 "] " $4 }' "$LOGS/gate.tsv" | tail -n 5
+  fi
 else
   printf '(no candidates yet)\n'
 fi

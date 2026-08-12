@@ -39,7 +39,7 @@
 # Optional environment:
 #   MAX_LONG      long posts kept in the pool        (default 4)
 #   MAX_SHORT     short posts kept in the pool       (default 8)
-#   MAX_NEW       candidates proposed per run        (default 5)
+#   MAX_NEW       candidates proposed per run        (default 8)
 #   TRASH_DAYS    how long evicted posts linger      (default 14)
 #   CORPUS_MAX    max chars of notes fed to Claude   (default 150000)
 #   ARCHIVE_DAYS  root notes older than this move to Obsidian/Archive/ (default 14)
@@ -109,7 +109,7 @@ NOTIFY="${NOTIFY:-$SCRIPT_DIR/notify.sh}"
 # --- knobs ------------------------------------------------------------------
 MAX_LONG="${MAX_LONG:-4}"
 MAX_SHORT="${MAX_SHORT:-8}"
-MAX_NEW="${MAX_NEW:-5}"
+MAX_NEW="${MAX_NEW:-8}"
 TRASH_DAYS="${TRASH_DAYS:-14}"
 CORPUS_MAX="${CORPUS_MAX:-150000}"
 HISTORY_LINES="${HISTORY_LINES:-40}"
@@ -1896,6 +1896,11 @@ main() {
     log "WARN stats snapshot failed"
   fi
   find "$statsdir" -maxdepth 1 -name '[0-9]*.txt' -mtime +365 -delete 2>/dev/null || true
+
+  # STATS.md in the repo root: the same numbers, but the one copy that is NOT
+  # gitignored — so the state of the pipeline is visible in the repo without
+  # digging through logs/. Public view (no titles): it gets committed.
+  "$SCRIPT_DIR/stats.sh" --write 2>/dev/null || log "WARN STATS.md refresh failed"
 }
 
 main "$@"

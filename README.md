@@ -294,6 +294,13 @@ Every successful daily run also snapshots this page to
 Like everything in `logs/`, snapshots are gitignored and never leave the
 laptop.
 
+The same run writes **`STATS.md` in the repo root** — the one copy that is not
+gitignored, so the state of the pipeline is visible in the repo itself. Because
+it gets committed it uses the `--public` view: post titles are omitted, since
+`logs/gate.tsv` records them *pre-alias* (the gate runs before anonymization)
+and a title can carry a real name. Regenerate it any time with
+`bin/stats.sh --write`; it changes on most runs, so expect it in `git status`.
+
 ## Configuration (environment)
 
 All optional; sensible defaults are baked in.
@@ -310,7 +317,10 @@ All optional; sensible defaults are baked in.
 `bin/suggest.sh` only:
 
 - `MAX_LONG` (4) / `MAX_SHORT` (8) — how many suggestions of each kind survive.
-- `MAX_NEW` (5) — how many candidates one run may propose.
+- `MAX_NEW` (8) — how many candidates one run may propose. This is a ceiling,
+  but `prompts/suggest.md` also tells the curator to keep looking until it hits
+  the ceiling or runs out of genuine convergences — so lowering it is the way to
+  ask for less, and the prompt bullet is the way to change how hard it reaches.
 - `TRASH_DAYS` (14) — how long an evicted suggestion stays in `Posts/Discarded/`.
 - `CORPUS_MAX` (150000) — char budget for the notes fed to Claude. When over
   budget, the newest notes get ~70% and the rest is filled with a random sample

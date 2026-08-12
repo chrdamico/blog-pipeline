@@ -96,9 +96,14 @@ titles and to the rare glue:
 - **Never force a connection.** Two notes sharing a keyword are not a post. A
   manufactured link is worse than silence, because it reads plausible and wastes
   a real idea.
-- **Propose fewer than the maximum, or none at all,** whenever the material does
-  not support more. Returning nothing is a correct and expected outcome, and a
-  routinely correct one. You are not being measured on volume.
+- **Work through the corpus until you reach the maximum or run out of real
+  convergences.** The allowance is meant to be used: the author reads the pool
+  daily and would rather choose among several honest attempts than receive one.
+  Do not stop at two because two feels like enough — keep looking for the next
+  genuine convergence until the corpus is actually exhausted.
+- **But never pad to hit the number.** The rule above is a floor on effort, not
+  on output. A forced connection fails the author worse than a short run does,
+  so if the material genuinely supports three, propose three and stop.
 
 ## Output format
 
