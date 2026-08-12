@@ -16,9 +16,13 @@ SB="$(mktemp -d)"
 trap 'rm -rf "$SB"' EXIT
 
 # Load the script's functions without running it: neutralise the final call.
-sed 's/^main "\$@"$/:/' bin/suggest.sh > "$SB/lib.sh"
+# The copy has to sit in bin/ rather than the scratch dir, because suggest.sh
+# locates lib/config.sh (and everything else) relative to its own path.
+LIB="$(mktemp "bin/.libtest.XXXXXX")"
+trap 'rm -rf "$SB" "$LIB"' EXIT
+sed 's/^main "\$@"$/:/' bin/suggest.sh > "$LIB"
 # shellcheck disable=SC1090,SC1091
-source "$SB/lib.sh" 2>/dev/null || { echo "TYPO GATE FAIL: could not load bin/suggest.sh"; exit 1; }
+source "$LIB" 2>/dev/null || { echo "TYPO GATE FAIL: could not load bin/suggest.sh"; exit 1; }
 
 pass=0; fail=0
 # $1 name, $2 expected (OK:<subs> | OK:<subs>/skip:<n> | REJECT), $3 note, $4 model output

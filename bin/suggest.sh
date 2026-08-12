@@ -54,7 +54,8 @@
 #   ALIASES       real-name -> alias-pool map, TSV (default private/aliases.tsv);
 #                 auto-extended by the name scout (NAME_SCAN=0 disables it,
 #                 SELF_NAME names the author, who is never aliased)
-#   CLAUDE_MODEL  model for the curator calls        (default claude-opus-5)
+#   CURATE_MODEL  model for the curator calls        (default claude-opus-5;
+#                 CLAUDE_MODEL still overrides it, as it always did)
 #   TYPO_FIX      proofread typed notes in place, once each (default 1; 0 off)
 #   TYPO_MODEL    model for the typo pass             (default claude-sonnet-5)
 #   TYPO_MIN_LEN  words shorter than this are never "corrected" (default 4)
@@ -62,87 +63,24 @@
 #   CLAUDE_BIN / NOTIFY   swap the backend commands (used by the test harness)
 #   SUGGEST_SCHEDULED  set by the timer unit; a slot whose day already
 #                 succeeded (logs/suggest.lastdone) exits immediately
+#
+# All of it — paths, prompts, models, knobs — is resolved in lib/config.sh,
+# which also re-roots the whole tree (BLOG_ROOT) and applies a profile
+# (BLOG_PROFILE). profiles/default.env is the full inventory.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# --- paths ------------------------------------------------------------------
-SYNC="$REPO_DIR/sync"
-VAULT="$SYNC/Obsidian"
-POSTS="$VAULT/Posts"
-TRASH="$POSTS/Discarded"
-REJECTED="$POSTS/Rejected"
-ARCHIVE="$VAULT/Archive"
-PROVENANCE="$POSTS/.provenance"
-DRAFTS="$REPO_DIR/drafts"
-WORK="$REPO_DIR/work"
-LOGS="$REPO_DIR/logs"
-PROMPTS="$REPO_DIR/prompts"
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
 
-SUGGEST_LOG="$LOGS/suggest.log"
-SUGGESTED="$LOGS/suggested.tsv"
-GATE_TSV="$LOGS/gate.tsv"
-USAGE_TSV="$LOGS/usage.tsv"
-STAMP="$LOGS/suggest.lastdone"
-ALIAS_STATE="$LOGS/aliases.last"
-
-TYPOFIX_TSV="$LOGS/typofix.tsv"
-
-SUGGEST_PROMPT="$PROMPTS/suggest.md"
-CURATE_PROMPT="$PROMPTS/curate.md"
-TYPO_PROMPT="$PROMPTS/typos.md"
-NAMES_PROMPT="$PROMPTS/names.md"
-ANCHOR="$PROMPTS/style-anchor.md"
-
-# --- swappable commands -----------------------------------------------------
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # Curation is the judgment-heavy step — reading the whole corpus, deciding what
 # is post-worthy, and writing in the author's voice — so it gets Opus. The
-# mechanical cleanup in process.sh runs on Sonnet.
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-opus-5}"
-# Proofreading a typed note is the most mechanical call in the pipeline —
-# one word in, the same word spelled right out — so it runs on Sonnet.
-TYPO_MODEL="${TYPO_MODEL:-claude-sonnet-5}"
-NOTIFY="${NOTIFY:-$SCRIPT_DIR/notify.sh}"
-
-# --- knobs ------------------------------------------------------------------
-MAX_LONG="${MAX_LONG:-4}"
-MAX_SHORT="${MAX_SHORT:-8}"
-MAX_NEW="${MAX_NEW:-8}"
-TRASH_DAYS="${TRASH_DAYS:-14}"
-CORPUS_MAX="${CORPUS_MAX:-150000}"
-HISTORY_LINES="${HISTORY_LINES:-40}"
-ARCHIVE_DAYS="${ARCHIVE_DAYS:-14}"
-VERBATIM_MIN="${VERBATIM_MIN:-85}"
-GLUE_MAX_WORDS="${GLUE_MAX_WORDS:-12}"
-NEW_SLACK_EVERY="${NEW_SLACK_EVERY:-25}"
-REJECT_DAYS="${REJECT_DAYS:-30}"
-REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
-REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
-# Typo pass over TYPED notes (see typofix_notes). Voice memos are proofread at
-# the transcription stage by prompts/cleanup.md and are never touched here.
-TYPO_FIX="${TYPO_FIX:-1}"
-TYPO_MIN_LEN="${TYPO_MIN_LEN:-4}"
-TYPO_MAX_PCT="${TYPO_MAX_PCT:-5}"
-# Anonymization map: real name -> comma-separated alias pool, drawn per post
-# (see make_alias_map below). Gitignored; absent = no-op for the map, but the
-# name scout (extend_aliases) creates and extends it on its own.
-ALIASES="${ALIASES:-$REPO_DIR/private/aliases.tsv}"
-# Name scout: one model call per run lists the person names in the candidates;
-# the script auto-extends ALIASES for any it does not know yet, so people who
-# enter the notes AFTER the map was written still get anonymized. A failed or
-# unusable scan withholds ALL candidates this run (fail closed). NAME_SCAN=0
-# disables the whole step. SELF_NAME is the author and is never aliased.
-NAME_SCAN="${NAME_SCAN:-1}"
-SELF_NAME="${SELF_NAME:-Christian}"
-# Reserve alias pools for auto-added names, by gender read from context (the
-# text keeps its pronouns, so the alias should not fight them; x fits either).
-# Collisions with the live map, the corpus, or the candidates are skipped at
-# pick time, so overlap here is harmless.
-RESERVE_F="Judith Helena Ronja Merle Frida Carla Teresa Bianca Sofia Irene Livia Paola Zoe Selin Aylin Esra Noemi Linnea Greta Elif Sanne Rosa Alma Leonie Tilda Edith Runa Amara"
-RESERVE_M="Anton Bruno Dario Fabio Georg Henrik Ivo Kilian Lorenz Matteo Nils Oskar Pavel Quentin Ruben Stefan Tobias Umberto Wim Yannick Aldo Boris Cem Darius Enzo Farid"
-RESERVE_X="Kim Luca Toni Micha Rowan Sage Noor Eli"
+# mechanical cleanup in process.sh runs on Sonnet, and the typo pass (the most
+# mechanical call in the pipeline: one word in, the same word spelled right
+# out) on Sonnet as well.
+CLAUDE_MODEL="$CURATE_MODEL"
 
 mkdir -p "$POSTS" "$POSTS/Keep" "$TRASH" "$REJECTED" "$ARCHIVE" "$PROVENANCE" "$WORK" "$LOGS"
 
@@ -724,8 +662,8 @@ normalize_txt_notes() {
   shopt -s nullglob
   for f in "$VAULT"/*.txt "$ARCHIVE"/*.txt; do
     dest="$(dedup_file "${f%.txt}" md)"
-    old_rel="${f#"$REPO_DIR"/}"
-    new_rel="${dest#"$REPO_DIR"/}"
+    old_rel="${f#"$BLOG_ROOT"/}"
+    new_rel="${dest#"$BLOG_ROOT"/}"
     mv "$f" "$dest"
     renamed=$((renamed + 1))
     log "TXT->MD $old_rel -> $new_rel"
@@ -765,8 +703,8 @@ archive_notes() {
         [ -n "$slug" ] || slug="note"
         dest="$(dedup_file "$ARCHIVE/${date}-${slug}" "$ext")" ;;
     esac
-    old_rel="${f#"$REPO_DIR"/}"
-    new_rel="${dest#"$REPO_DIR"/}"
+    old_rel="${f#"$BLOG_ROOT"/}"
+    new_rel="${dest#"$BLOG_ROOT"/}"
     mv "$f" "$dest"
     moved=$((moved + 1))
     log "ARCHIVE $old_rel -> $new_rel"
@@ -823,7 +761,7 @@ typofix_notes() {
     [ -s "$f" ] || continue
     h="$(sha256 "$f")" || continue
     grep -q "^$h	" "$TYPOFIX_TSV" 2>/dev/null && continue
-    rel="${f#"$REPO_DIR"/}"
+    rel="${f#"$BLOG_ROOT"/}"
     scanned=$((scanned + 1))
 
     {
@@ -1306,7 +1244,7 @@ build_corpus() {
 
   # emit newest-first regardless of which phase selected a note
   while IFS=$'\t' read -r mt f; do
-    rel="${f#"$REPO_DIR"/}"
+    rel="${f#"$BLOG_ROOT"/}"
     {
       printf '\n### NOTE id=%s\n\n' "$rel"
       filter_claimed "$f" "$claimed.hidden"
@@ -1347,7 +1285,7 @@ emit_full_corpus() {
   local out="$1" f rel
   : > "$out"
   while IFS=$'\t' read -r _ f; do
-    rel="${f#"$REPO_DIR"/}"
+    rel="${f#"$BLOG_ROOT"/}"
     {
       printf '\n### NOTE id=%s\n\n' "$rel"
       cat "$f"
@@ -1561,7 +1499,7 @@ write_candidates() {
     while IFS= read -r src; do
       src="$(printf '%s' "$src" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
       [ -n "$src" ] || continue
-      if [ -f "$REPO_DIR/$src" ]; then
+      if [ -f "$BLOG_ROOT/$src" ]; then
         valid+=("$src"); n_valid=$((n_valid + 1))
       else
         log "WARN candidate '$title': unknown source '$src' dropped"

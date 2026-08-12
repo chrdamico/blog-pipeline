@@ -31,45 +31,28 @@
 # Test / backend-swap seams (env overrides, all optional):
 #   TRANSCRIBE    command run as "<cmd> <audio>" -> transcript on stdout
 #   CLAUDE_BIN    the claude CLI (default: claude)
-#   CLAUDE_MODEL  model for the cleanup/structure calls (default: claude-sonnet-5)
+#   CLEANUP_MODEL model for the cleanup/structure calls (default: claude-sonnet-5;
+#                 CLAUDE_MODEL still overrides it, as it always did)
 #   NOTIFY        the notifier command (default: bin/notify.sh)
+#
+# Everything above is resolved in lib/config.sh, which also re-roots the whole
+# tree (BLOG_ROOT) and applies a profile (BLOG_PROFILE) — see profiles/default.env.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# --- paths ------------------------------------------------------------------
-# SYNC is the single Syncthing folder shared with the phone (where it is called
-# /blog). Recordings land at its root. sync/Obsidian/ is the notes vault — the
-# audio glob in main() is deliberately non-recursive, so the vault (and the
-# post suggestions inside it) is invisible to this script.
-SYNC="$REPO_DIR/sync"
-DRAFTS="$REPO_DIR/drafts"
-WORK="$REPO_DIR/work"
-LOGS="$REPO_DIR/logs"
-PROMPTS="$REPO_DIR/prompts"
-PROCESSED="$LOGS/processed.tsv"
-PROCESS_LOG="$LOGS/process.log"
-CLEANUP_PROMPT="$PROMPTS/cleanup.md"
-STRUCTURE_PROMPT="$PROMPTS/structure.md"
-ANCHOR="$PROMPTS/style-anchor.md"
+# One resolution point for every path, prompt, model and knob below. SYNC is the
+# single Syncthing folder shared with the phone (where it is called /blog);
+# recordings land at its root, and sync/Obsidian/ is the notes vault — the audio
+# glob in main() is deliberately non-recursive, so the vault (and the post
+# suggestions inside it) is invisible to this script.
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
 
-# --- swappable commands -----------------------------------------------------
-TRANSCRIBE="${TRANSCRIBE:-$SCRIPT_DIR/transcribe.sh}"
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
 # Cleanup is a constrained voice-preserving transform — Sonnet handles it well
-# and burns less of the subscription. The curator (suggest.sh) uses Fable.
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-5}"
-NOTIFY="${NOTIFY:-$SCRIPT_DIR/notify.sh}"
-
-# Optional structure suggestion (Phase 4). Off by default so the core stays a
-# single Claude call; STRUCTURE=1 adds a separate structure.md to each bundle.
-STRUCTURE="${STRUCTURE:-0}"
-
-# How long a processed recording (and the transcript written next to it) stays
-# in sync/ before reap_sync removes it. This governs only how long the phone
-# keeps its copy — the bundle in drafts/ is permanent either way.
-SYNC_KEEP_DAYS="${SYNC_KEEP_DAYS:-14}"
+# and burns less of the subscription. The curator (suggest.sh) uses Opus.
+CLAUDE_MODEL="$CLEANUP_MODEL"
 
 # Audio extensions we handle (matched case-insensitively).
 AUDIO_EXTS=(m4a mp3 opus ogg wav)
@@ -309,8 +292,8 @@ process_one() {
   #     syncs across days later would otherwise be reaped the moment it lands.
   touch "$audio" "$companion" 2>/dev/null || true
 
-  # 6. record (hash \t original \t repo-relative bundle \t iso-timestamp) + notify
-  rel="${dest#"$REPO_DIR"/}"
+  # 6. record (hash \t original \t root-relative bundle \t iso-timestamp) + notify
+  rel="${dest#"$BLOG_ROOT"/}"
   printf '%s\t%s\t%s\t%s\n' \
     "$hash" "$origname" "$rel" "$(date '+%Y-%m-%dT%H:%M:%S%z')" >> "$PROCESSED"
   log "DONE $origname -> $rel"

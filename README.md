@@ -88,7 +88,13 @@ blog-pipeline/
 │   ├── suggest.sh     # the post-suggestion job (daily)
 │   ├── transcribe.sh  # whisper.cpp wrapper (swappable STT backend)
 │   ├── note.sh        # text-note capture from the terminal (writes the vault)
+│   ├── reclean.sh     # re-run cleanup over existing bundles (prompt upgrades)
+│   ├── stats.sh       # the pipeline at a glance; writes STATS.md
 │   └── notify.sh      # notify-send / osascript wrapper
+├── lib/
+│   └── config.sh      # every path, prompt, model and knob, resolved in one place
+├── profiles/
+│   └── default.env    # the full inventory of knobs, at their defaults
 ├── prompts/
 │   ├── cleanup.md      # voice-preserving cleanup prompt
 │   ├── structure.md    # optional outline-suggestion prompt
@@ -99,6 +105,7 @@ blog-pipeline/
 │   └── style-anchor.example.md # template: copy to style-anchor.md (gitignored) + add your writing
 ├── tests/             # check_privacy.sh: nothing personal is ever committed
 │                      # check_typo_gate.sh: the typo pass only respells words
+│                      # check_defaults.sh: the config layer changes nothing
 ├── .githooks/         # pre-commit hook running that check (wired by install.sh)
 ├── watcher/           # systemd user units + (untested) macOS launchd plists
 ├── sync/              # THE Syncthing folder (the phone calls it /blog)
@@ -303,7 +310,35 @@ and a title can carry a real name. Regenerate it any time with
 
 ## Configuration (environment)
 
-All optional; sensible defaults are baked in.
+All optional; sensible defaults are baked in. Every knob below is resolved in
+one place — **`lib/config.sh`**, sourced by each script — which also adds three
+things no single script could:
+
+- **A re-rootable tree.** Every data path hangs off `BLOG_ROOT` (default: the
+  repo) and is individually overridable (`BLOG_DRAFTS=…`, `BLOG_LOGS=…`).
+  Export one variable and a whole run happens in a sandbox, never touching the
+  live `drafts/`, `processed.tsv`, or the phone.
+- **A prompt overlay.** `PROMPTS_DIR=<dir>` is searched before `prompts/`, so a
+  prompt variant is a directory holding only the file it changes. Individual
+  prompts can also be pinned (`SUGGEST_PROMPT=…`, `CLEANUP_PROMPT=…`, `ANCHOR=…`).
+- **Profiles.** `BLOG_PROFILE=<name>` applies `profiles/<name>.env` before the
+  defaults, so a profile states only its deltas. `profiles/default.env` is the
+  documented inventory of every knob there is. Precedence, highest first: the
+  environment, the profile, the defaults.
+
+```sh
+lib/config.sh paths                       # where this configuration reads and writes
+lib/config.sh dump                        # the resolved configuration, sorted
+lib/config.sh fingerprint                 # 12 hex characters identifying it
+BLOG_PROFILE=personas lib/config.sh dump  # ... under a profile
+```
+
+The **fingerprint** hashes the dump — models, knobs, and prompt *contents*, but
+never paths — so two runs with the same fingerprint are the same variant
+whatever the profile was called, and a sandbox copy of a variant fingerprints
+identically to the live one. It is what provenance stamps on every artifact
+(see *Provenance*), and `tests/check_defaults.sh` asserts, value by value, that
+a profileless run still resolves to exactly the numbers below.
 
 - `STRUCTURE=1` — also emit a `structure.md` outline per bundle (extra Claude call).
 - `WHISPER_MODEL` / `WHISPER_LANG` / `WHISPER_THREADS` / `WHISPER_BIN` — tune STT

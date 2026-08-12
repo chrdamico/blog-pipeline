@@ -28,10 +28,16 @@
 #                    jq is not installed — output is then identical to before)
 #   WHISPER_CONF_LOW   a word below this p is "low" (default 0.40)
 #   WHISPER_CONF_VLOW  a single low word only marks below this p (default 0.25)
+#
+# All of these are resolved in lib/config.sh, so a profile (BLOG_PROFILE) can
+# set them for a whole run — see profiles/default.env.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
 
 die() { echo "transcribe: $*" >&2; exit 1; }
 
@@ -40,11 +46,9 @@ audio="$1"
 [ -f "$audio" ] || die "no such file: $audio"
 
 # --- configuration (env overrides win) --------------------------------------
-WHISPER_MODEL="${WHISPER_MODEL:-$REPO_DIR/models/ggml-large-v3-q5_0.bin}"
-WHISPER_LANG="${WHISPER_LANG:-auto}"
-WHISPER_MARKS="${WHISPER_MARKS:-1}"
-WHISPER_CONF_LOW="${WHISPER_CONF_LOW:-0.40}"
-WHISPER_CONF_VLOW="${WHISPER_CONF_VLOW:-0.25}"
+# Thread count is the one knob config.sh leaves empty: it is a property of the
+# machine, not of the variant, so it is filled in here and stays out of the
+# config fingerprint.
 if [ -z "${WHISPER_THREADS:-}" ]; then
   if command -v nproc >/dev/null 2>&1; then
     WHISPER_THREADS="$(nproc)"

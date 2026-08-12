@@ -15,10 +15,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-LOGS="$REPO_DIR/logs"
-VAULT="$REPO_DIR/sync/Obsidian"
-POSTS="$VAULT/Posts"
-STATS_MD="$REPO_DIR/STATS.md"
+
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
+
+# At the root of whatever tree is being reported on — the repo for a live run,
+# the sandbox for an experiment.
+STATS_MD="$BLOG_ROOT/STATS.md"
 
 # --public omits post titles. logs/gate.tsv stores them PRE-alias (the gate runs
 # before anonymization), so a title can carry a real name — fine for the local
@@ -73,7 +76,7 @@ printf 'Discarded/  : %s\n' "$(count "$POSTS/Discarded")"
 printf 'Rejected/   : %s\n' "$(count "$POSTS/Rejected")"
 
 printf '\n== material ==\n'
-printf 'draft bundles : %s\n' "$(find "$REPO_DIR/drafts" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
+printf 'draft bundles : %s\n' "$(find "$DRAFTS" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
 printf 'notes (root)  : %s\n' "$(count "$VAULT")"
 printf 'notes (archive): %s\n' "$(count "$VAULT/Archive")"
 

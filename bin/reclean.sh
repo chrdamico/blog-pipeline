@@ -24,24 +24,19 @@
 # Takes process.sh's lock (waiting up to 10 minutes for it), so it can never
 # race the 15-minute timer; while it runs, timer runs skip harmlessly.
 #
-# Env (the same seams as process.sh): CLAUDE_BIN, CLAUDE_MODEL (default
-# claude-sonnet-5 — cleanup stays the constrained transform Sonnet handles).
+# Env (the same seams as process.sh, resolved in lib/config.sh): CLAUDE_BIN,
+# CLEANUP_MODEL (default claude-sonnet-5 — cleanup stays the constrained
+# transform Sonnet handles; CLAUDE_MODEL still overrides it), BLOG_PROFILE,
+# PROMPTS_DIR, CLEANUP_DIRECTIVE.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-SYNC="$REPO_DIR/sync"
-DRAFTS="$REPO_DIR/drafts"
-WORK="$REPO_DIR/work"
-LOGS="$REPO_DIR/logs"
-PROMPTS="$REPO_DIR/prompts"
-RECLEAN_LOG="$LOGS/reclean.log"
-CLEANUP_PROMPT="$PROMPTS/cleanup.md"
-ANCHOR="$PROMPTS/style-anchor.md"
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
 
-CLAUDE_BIN="${CLAUDE_BIN:-claude}"
-CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-5}"
+CLAUDE_MODEL="$CLEANUP_MODEL"
 
 AUDIO_EXTS=(m4a mp3 opus ogg wav)
 
