@@ -113,9 +113,26 @@ claude_transform() {
   return $rc
 }
 
+# The recording inside a bundle, or nothing. process.sh copies the audio in, so
+# the bundle carries its own source — which is what lets meta.json keep the
+# recording's content hash across a reclean. Bundles from before meta.json
+# existed have no stored hash to inherit, so it is recomputed here rather than
+# left empty: it is the only join key back to logs/processed.tsv.
+bundle_audio() {
+  local dir="$1" ext a
+  for ext in "${AUDIO_EXTS[@]}"; do
+    for a in "$dir"/*."$ext"; do
+      [ -f "$a" ] || continue
+      printf '%s' "$a"
+      return 0
+    done
+  done
+  return 0
+}
+
 # --- reclean one bundle (returns non-zero on failure) ------------------------
 reclean_one() {
-  local dir="$1" name tmp audio companion a ext
+  local dir="$1" name tmp audio companion a ext src_audio
   name="$(basename "$dir")"
 
   if [ ! -f "$dir/verbatim.md" ]; then
@@ -148,8 +165,12 @@ reclean_one() {
   if cmp -s "$tmp/cleaned.md" "$dir/cleaned.md"; then
     # Byte-identical output is still a fact about this configuration, and one
     # worth recording: "the loose prompt changed nothing here" is a result.
-    prov_write_meta "$dir" reclean "" "" "$dir/verbatim.md" "$dir/cleaned.md" \
-      "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS"
+    src_audio="$(bundle_audio "$dir")"
+    prov_write_meta "$dir" reclean "$src_audio" \
+      "$([ -n "$src_audio" ] && blog_sha256 "$src_audio" || printf -- -)" \
+      "$dir/verbatim.md" "$dir/cleaned.md" \
+      "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS" \
+      || log "WARN could not write meta.json for $name"
     prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12),unchanged"
     log "UNCHANGED $name"
     rm -rf "$tmp"
@@ -187,8 +208,12 @@ reclean_one() {
   # The bundle's meta.json now describes the configuration that produced the
   # cleaned.md sitting there — which is this one, not the one from the original
   # run. first_seen is carried over so the bundle keeps its own age.
-  prov_write_meta "$dir" reclean "" "" "$dir/verbatim.md" "$dir/cleaned.md" \
-    "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS"
+  src_audio="$(bundle_audio "$dir")"
+  prov_write_meta "$dir" reclean "$src_audio" \
+    "$([ -n "$src_audio" ] && blog_sha256 "$src_audio" || printf -- -)" \
+    "$dir/verbatim.md" "$dir/cleaned.md" \
+    "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS" \
+    || log "WARN could not write meta.json for $name"
   prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12)"
 
   log "RECLEANED $name"

@@ -32,3 +32,9 @@ bin/whisper-cli
 *.opus
 *.ogg
 *.flac
+
+# The realistic sample set is the author's own recordings and notes — and so is
+# the LIST of which ones, because a bundle slug is made of the words he said.
+# Only samples/real.list.example (entirely invented) is committed.
+samples/real/
+samples/real.list

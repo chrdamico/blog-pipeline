@@ -75,6 +75,22 @@ printf 'Keep/       : %s\n' "$(count "$POSTS/Keep")"
 printf 'Discarded/  : %s\n' "$(count "$POSTS/Discarded")"
 printf 'Rejected/   : %s\n' "$(count "$POSTS/Rejected")"
 
+# --- live A/B arms ------------------------------------------------------------
+# The section that answers "which of these is working", every day, without
+# asking for it. Silent when nothing is being tested, so the normal report does
+# not grow a heading about an experiment that is not running.
+if [ -n "$(blog_active_arms)" ] || { [ -f "$ARMS_TSV" ] && [ -s "$ARMS_TSV" ]; }; then
+  printf '\n== live A/B arms ==\n'
+  while IFS=$'\t' read -r aname acreated astatus anote; do
+    [ -n "${aname:-}" ] || continue
+    printf '%-12s %-9s since %s  %s\n' "$aname" "$astatus" "$acreated" "${anote:-}"
+  done < "$ARMS_TSV"
+  printf '\n'
+  # The accept rates themselves, from the same place bin/arm.sh status reads.
+  "$SCRIPT_DIR/score.sh" --arms 2>/dev/null | sed -n '3,20p' | sed '/^$/q'
+  printf '\n(bin/arm.sh list · bin/arm.sh status · bin/arm.sh promote <name>)\n'
+fi
+
 printf '\n== material ==\n'
 printf 'draft bundles : %s\n' "$(find "$DRAFTS" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')"
 printf 'notes (root)  : %s\n' "$(count "$VAULT")"

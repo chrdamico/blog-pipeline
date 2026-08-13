@@ -1,0 +1,128 @@
+# CLAUDE.md — working notes for Claude sessions in this repo
+
+Dictation-first blog pipeline (see README.md for the full tour). Two live
+systemd timers run `bin/process.sh` (every 15 min) and `bin/suggest.sh`
+(daily 03:00) on this machine — **changes to those scripts go live within
+minutes**, so run the tests after any edit:
+
+```sh
+bash tests/check_defaults.sh     # the config layer resolves to today's values
+bash tests/check_gate.sh         # gate seams change no verdict; report mode is sandbox-only
+bash tests/check_provenance.sh   # meta.json stays valid JSON; a reclean keeps the audio identity
+bash tests/check_privacy.sh      # nothing personal is committed
+bash tests/check_typo_gate.sh
+```
+
+None of them call a model, so they are free and fast — run all five.
+
+## When Christian says "do this change as an A/B test"
+
+He means a LIVE ARM, not the offline runner. The recipe, in full:
+
+```sh
+bin/arm.sh new <name> KEY=VALUE ... --note "the question it answers"
+bin/arm.sh try <name>          # against samples/notes/, sandboxed, reproducible
+bin/arm.sh run <name>          # generate into the REAL pool now (costs a call)
+```
+
+Rules for doing this well:
+
+- **Express the change as deltas, never by editing the base.** If it needs a new
+  prompt, put the file in `profiles/overlays/<name>/` and set `PROMPTS_DIR=` in
+  the arm; if it needs new instructions, write a directive file and set
+  `CURATE_DIRECTIVE=`. `bin/arm.sh new` prints the resolved diff against the
+  base — check it says what you meant.
+- **Never touch `profiles/base.env` by hand.** Only `bin/arm.sh promote` writes
+  it, and that is how "test B is great, move it to base" is supposed to happen.
+- **Show him `bin/arm.sh try <name>` output before it goes live.** It costs one
+  call, uses the committed sample notes, and proves the arm produces something.
+- Arms run automatically every day after the base, into `Posts/<name>/`. He
+  reads both folders on the phone and moves what he likes to `Keep/`.
+- "Test C is a failure, remove it" → `bin/arm.sh retire C` (its pool goes to
+  `Discarded/`, recoverable; the registry keeps the row).
+- Statistics land in `STATS.md` at the repo root every run, and in
+  `bin/arm.sh status`. The registry is `logs/arms.tsv`.
+
+Design invariants not to break: claims are **arm-scoped** (`build_claimed`
+filters on the post's `arm:` frontmatter) so no arm starves another; `Keep/`,
+`Discarded/` and `Rejected/` stay **shared** so judging and promotion never move
+files around; each arm's posts carry the arm in **both** the folder and the
+filename, because `.provenance/` is flat and two arms must not collide there.
+
+## The experiment (A/B) layer
+
+Everything is resolved in `lib/config.sh` — paths, prompts, models, knobs.
+`profiles/default.env` is the runnable inventory of every knob. Design doc:
+PLAN-AB.md (gitignored, local). Full user docs: README.md §Provenance and
+§Experiments.
+
+Key mechanics, in one screen:
+
+- **Profiles**: `BLOG_PROFILE=<name>` loads `profiles/<name>.env` (deltas
+  only; real environment always outranks the profile).
+- **Re-rooting**: `BLOG_ROOT=<dir>` moves the whole data tree (sync/, drafts/,
+  logs/, private/). This is how sandboxes work; the code root never moves.
+- **Prompt overlay**: `PROMPTS_DIR=<dir>` — only the files it contains
+  override `prompts/`; per-prompt pins like `SUGGEST_PROMPT=…` also work.
+- **Directive slot**: prompt stream is instructions + style anchor +
+  DIRECTIVE + input. `CLEANUP_DIRECTIVE=` / `CURATE_DIRECTIVE=` name a small
+  file; empty means byte-identical to the pre-experiment stream.
+- **Personas**: `PERSONAS=<tsv>` (`name<TAB>directive-file`, paths relative
+  to the TSV) fans generation out into one call per persona, MAX_NEW split
+  between them; each candidate gets `persona:` frontmatter.
+- **Fingerprint**: `lib/config.sh dump|fingerprint|variant|paths` shows what
+  an environment resolves to. Prompts enter the fingerprint by CONTENT hash;
+  paths and thread counts are deliberately excluded.
+- **Provenance**: every bundle gets `drafts/<b>/meta.json`; every candidate
+  post gets `variant:`/`persona:`/`run:` frontmatter; every artifact gets a
+  row in `logs/provenance.tsv`. Never strip these — `bin/score.sh` joins on
+  them.
+
+Offline experiments:
+
+```sh
+bin/ab.sh freeze              # once (and after notable new memos): fixtures from drafts/ + vault snapshot
+bin/ab.sh list                # fixtures, experiments, past runs
+bin/ab.sh run <exp>           # eval/experiments/<exp>.exp — sandboxed, EXPENSIVE (Claude calls)
+bin/ab.sh report <exp>        # rebuild eval/runs/<exp>/REPORT.md
+bin/ab.sh judge <exp>         # optional pairwise LLM judge — also expensive
+bin/ab.sh promote <exp> <v>   # freeze a variant's rows as eval/baseline/
+bin/ab.sh score               # ONLINE metric: what the live pool did per variant/persona
+```
+
+## Rules that protect the pipeline's pillars
+
+- `GATE_MODE=report` (gate classifies but never rejects) is SANDBOX-ONLY:
+  it would put model-written prose on the phone wearing the author's voice.
+  `suggest.sh` main() **refuses to start** in report mode when `BLOG_ROOT`
+  equals the repo (pinned by check_gate.sh). Don't weaken that guard; a
+  sandbox is one `BLOG_ROOT=` away, and `bin/ab.sh` sets it for you.
+- An `.exp` variant may not set any `BLOG_*` or `ALIASES` (ab.sh rejects the
+  whole prefix — those are the only handles that could point a sandboxed run
+  at live data); use a profile instead. `VARIANT_x_ENV` is eval-split, so
+  quoted values with spaces work.
+- `eval/` except `eval/experiments/` is gitignored personal data (fixtures
+  are real memos and the real vault). Same for `drafts/`, `sync/`,
+  `private/`, `logs/`. Never commit or publish content from them.
+- `ab.sh run` truncates `eval/runs/<exp>/metrics.tsv` and reuses the run
+  directories — promote (or copy) results you want to keep before re-running.
+- Suggest-stage metrics come from the sandbox's own `logs/provenance.tsv`
+  (`candidates`/`rejected`/the sentence classes = what THIS run produced),
+  never from counting the tree, which also holds the seeded snapshot.
+  `pool_long`/`pool_short` are the exception and are end-state by design.
+- Re-running `ab.sh freeze` overwrites the vault snapshot — old runs' inputs
+  are gone at that point; treat REPORT.md as the durable record.
+- Changing any prompt file changes the fingerprint, so live artifacts start
+  carrying a new variant id automatically. That is intended — `score.sh`
+  groups by it.
+
+## Conventions
+
+- Shell style: bash, `set -euo pipefail`, long prose comments explaining the
+  WHY; match it. Comment density here is deliberately high — this is a
+  personal repo the owner reads like documentation.
+- Commit messages: short lowercase `area: what changed` with a sentence-long
+  poetic bent (read `git log --oneline` first).
+- Models per stage: cleanup/typos = Sonnet, curator = Opus, all overridable
+  (`CLEANUP_MODEL`, `CURATE_MODEL`, `TYPO_MODEL`; blunt `CLAUDE_MODEL` still
+  overrides the first two).

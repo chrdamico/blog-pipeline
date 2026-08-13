@@ -24,6 +24,7 @@
 #
 # Usage:
 #   score.sh              per variant
+#   score.sh --arms       per live A/B arm (what bin/arm.sh status shows)
 #   score.sh --personas   per persona instead (for a persona experiment)
 #   score.sh --since 2026-08-01
 #   score.sh --posts      one line per post, for reading by hand or by awk
@@ -40,6 +41,7 @@ MODE=summary
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --personas) GROUP=persona; shift ;;
+    --arms)     GROUP=arm; shift ;;
     --variants) GROUP=variant; shift ;;
     --since)    SINCE="$2"; shift 2 ;;
     --posts)    MODE=posts; shift ;;
@@ -66,25 +68,47 @@ file_date() { date -d "@$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1")" '+%Y-
 # A post's identity is its basename: the pipeline never renames one, it only
 # moves it between Posts/, Keep/ and Discarded/ — which is exactly what makes
 # the move readable as a verdict.
-posts_tsv() {
-  local f state dir variant persona created sdate id
+# Every pool folder: the base's, plus one per arm. An arm's posts are in the
+# pool too — they are just in a folder of their own — and counting them as gone
+# would make every arm look like it loses everything it proposes.
+pool_dirs() {
+  printf '%s\n' "$POSTS"
+  local d
   shopt -s nullglob
-  for dir in "$POSTS" "$POSTS/Keep" "$TRASH" "$REJECTED"; do
+  for d in "$POSTS"/*/; do
+    case "$(basename "${d%/}")" in Keep|Discarded|Rejected) continue ;; esac
+    printf '%s\n' "${d%/}"
+  done
+  shopt -u nullglob
+}
+
+posts_tsv() {
+  local f state dir variant persona created sdate id arm
+  shopt -s nullglob
+  # A while-read rather than mapfile: this repo still means to run on macOS,
+  # whose /bin/bash is 3.2 and has no mapfile.
+  local dirs=() d
+  while IFS= read -r d; do dirs+=("$d"); done < <(pool_dirs)
+  dirs+=("$POSTS/Keep" "$TRASH" "$REJECTED")
+  for dir in "${dirs[@]}"; do
     case "$dir" in
-      "$POSTS")    state=pool ;;
       "$POSTS/Keep") state=kept ;;
       "$TRASH")    state=evicted ;;
       "$REJECTED") state=rejected ;;
+      *)           state=pool ;;
     esac
     for f in "$dir"/*.md; do
       id="$(basename "$f" .md)"
       variant="$(fm "$f" variant)"; [ -n "$variant" ] || variant=pre-experiment
       persona="$(fm "$f" persona)"; [ -n "$persona" ] || persona='(none)'
+      # The arm is written into every post since the live-arm step; anything
+      # older belongs to the base, which is what it was made by.
+      arm="$(fm "$f" arm)"; [ -n "$arm" ] || arm=base
       created="$(fm "$f" created)"; [ -n "$created" ] || created="$(file_date "$f")"
       # mtime means different things by directory, and both are the ones we
       # want: eviction resets it in Discarded/, so it dates the eviction.
       sdate="$(file_date "$f")"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$variant" "$persona" "$created" "$sdate" "$id"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$state" "$variant" "$persona" "$created" "$sdate" "$id" "$arm"
     done
   done
   shopt -u nullglob
@@ -100,7 +124,8 @@ posts_tsv() {
 # adjacent tabs into one — and the empty field between them is the persona.
 gone_tsv() {
   [ -s "$PROVENANCE_TSV" ] || return 0
-  { ls "$POSTS"/*.md "$POSTS"/Keep/*.md "$TRASH"/*.md "$REJECTED"/*.md 2>/dev/null || true; } \
+  { while IFS= read -r d; do ls "$d"/*.md 2>/dev/null || true; done < <(pool_dirs)
+    ls "$POSTS"/Keep/*.md "$TRASH"/*.md "$REJECTED"/*.md 2>/dev/null || true; } \
     | sed 's#.*/##; s#\.md$##' | sort -u > "$tmp/live_ids"
   awk -F'\t' '
     NR == FNR { live[$0] = 1; next }
@@ -109,7 +134,8 @@ gone_tsv() {
       id = $4; sub(/.*\//, "", id); sub(/\.md$/, "", id)
       if (id in live) next
       d = substr($1, 1, 10)
-      printf "gone\t%s\t%s\t%s\t%s\t%s\n", $5, ($6 == "" ? "(none)" : $6), d, d, id
+      arm = $5; sub(/:.*/, "", arm); if (arm == "default" || arm == "") arm = "base"
+      printf "gone\t%s\t%s\t%s\t%s\t%s\t%s\n", $5, ($6 == "" ? "(none)" : $6), d, d, id, arm
     }' "$tmp/live_ids" "$PROVENANCE_TSV"
 }
 
@@ -120,7 +146,9 @@ proposed_tsv() {
   awk -F'\t' -v g="$GROUP" -v since="$SINCE" '
     $3 != "candidate" && $3 != "rejected" { next }
     since != "" && substr($1, 1, 10) < since { next }
-    { key = (g == "persona") ? ($6 == "" ? "(none)" : $6) : $5
+    { key = $5
+      if (g == "persona") key = ($6 == "" ? "(none)" : $6)
+      else if (g == "arm") { sub(/:.*/, "", key); if (key == "default" || key == "") key = "base" }
       if ($3 == "candidate") acc[key]++; else rej[key]++
       seen[key] = 1 }
     END { for (k in seen) printf "%s\t%d\t%d\n", k, acc[k], rej[k] }' "$PROVENANCE_TSV"
@@ -148,15 +176,26 @@ printf '\n'
 # LC_ALL=C so a mean prints as 7.0d and not 7,0d.
 LC_ALL=C awk -F'\t' -v g="$GROUP" '
   FILENAME == ARGV[1] {
-    key = (g == "persona") ? $3 : $2
+    key = (g == "persona") ? $3 : (g == "arm" ? $7 : $2)
     state = $1
     n[key]++; s[key, state]++
     if (state == "evicted" && $4 != "" && $5 != "") {
       # Days from the day it was written to the day the curator threw it out —
       # how long a candidate of this kind tends to survive being re-read.
+      #
+      # b and a are cleared and the getline RESULT is checked, both of which
+      # matter: getline leaves its variable untouched when the command produces
+      # nothing, so a post whose `created:` a phone editor mangled would not be
+      # skipped — it would silently reuse the epochs of whichever row came
+      # before it, in the one table whose whole job is telling variants apart.
+      b = ""; a = ""
       cmd = "date -d \"" $5 "\" +%s 2>/dev/null; date -d \"" $4 "\" +%s 2>/dev/null"
-      cmd | getline b; cmd | getline a; close(cmd)
-      if (b != "" && a != "" && b >= a) { surv[key] += (b - a) / 86400; survn[key]++ }
+      if ((cmd | getline b) <= 0) b = ""
+      if ((cmd | getline a) <= 0) a = ""
+      close(cmd)
+      if (b + 0 > 0 && a + 0 > 0 && b + 0 >= a + 0) {
+        surv[key] += (b - a) / 86400; survn[key]++
+      }
     }
     keys[key] = 1
     next

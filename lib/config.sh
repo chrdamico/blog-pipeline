@@ -64,6 +64,8 @@ BLOG_REPO_DIR="$(cd "$BLOG_LIB_DIR/.." && pwd)"
 # A key already present in the environment is left alone — the environment
 # outranks the profile, always.
 BLOG_PROFILE_FILE=""
+# Keys any profile, arm or base.env has exported into this shell.
+BLOG_APPLIED_KEYS=""
 blog_resolve_profile() {
   local p="$1"
   case "$p" in
@@ -84,12 +86,28 @@ blog_apply_profile() {
     v="${line#*=}"
     [ "$k" != "$line" ] || continue                  # no '=' on the line
     case "$k" in ''|*[!A-Za-z0-9_]*) continue ;; esac
-    # already in the environment? the environment wins.
-    [ -z "${!k+x}" ] || continue
+    # Already in the environment? The environment wins — but only when it says
+    # something. `MAX_NEW= bin/suggest.sh` is an empty variable, not an
+    # instruction, and it used to beat the profile and then fall through `:-` to
+    # the shipped default, which is neither of the two values in play. Treating
+    # set-but-empty as unset makes the profile's answer the one that survives.
+    [ -z "${!k:+x}" ] || continue
+    # Remembered so a child process can be started WITHOUT them. An arm run is
+    # spawned by the base run, and anything the base exported would arrive in
+    # the child as environment — which outranks the arm's own file, silently
+    # pinning every arm to the base's values. See spawn_arm in bin/suggest.sh.
+    case " $BLOG_APPLIED_KEYS " in *" $k "*) ;; *) BLOG_APPLIED_KEYS="$BLOG_APPLIED_KEYS $k" ;; esac
     eval "export $k=$v" 2>/dev/null \
       || { printf 'config: unusable line in %s: %s\n' "$f" "$line" >&2; return 1; }
   done < "$f"
 }
+
+# Which model keys arrived from the ENVIRONMENT, taken before a profile can
+# export its own and make the two indistinguishable. blog_model below needs the
+# difference; nothing else does.
+BLOG_ENV_CLEANUP_MODEL="${CLEANUP_MODEL:+set}"
+BLOG_ENV_CURATE_MODEL="${CURATE_MODEL:+set}"
+BLOG_ENV_CLAUDE_MODEL="${CLAUDE_MODEL:+set}"
 
 if [ -n "${BLOG_PROFILE:-}" ]; then
   BLOG_PROFILE_FILE="$(blog_resolve_profile "$BLOG_PROFILE")"
@@ -99,6 +117,37 @@ if [ -n "${BLOG_PROFILE:-}" ]; then
   fi
   blog_apply_profile "$BLOG_PROFILE_FILE" || exit 2
 fi
+
+# --- arms ----------------------------------------------------------------------
+# An ARM is a live experiment: a named set of deltas that runs every day beside
+# the base configuration, writing into its own pool folder, until you promote it
+# into the base or retire it (bin/arm.sh). BLOG_ARM names the one this run is
+# for; empty means the base itself, which is an arm like any other except that
+# it owns the pool's root folder and is the one a promotion writes into.
+#
+# Its deltas are applied AFTER any BLOG_PROFILE, so the arm cannot quietly
+# outrank a profile you named on the command line, and after the environment for
+# the same reason as everything else here.
+ARMS_DIR="${ARMS_DIR:-$BLOG_REPO_DIR/arms}"
+BLOG_ARM="${BLOG_ARM:-}"
+case "$BLOG_ARM" in
+  ''|base) BLOG_ARM="" ;;
+  *[!A-Za-z0-9_-]*)
+    printf 'config: bad arm name %s — use [A-Za-z0-9_-]\n' "$BLOG_ARM" >&2; exit 2 ;;
+  *)
+    if [ -f "$ARMS_DIR/$BLOG_ARM.env" ]; then
+      blog_apply_profile "$ARMS_DIR/$BLOG_ARM.env" || exit 2
+    else
+      printf 'config: no such arm: %s (looked for %s)\n' "$BLOG_ARM" "$ARMS_DIR/$BLOG_ARM.env" >&2
+      exit 2
+    fi ;;
+esac
+
+# The base's own deltas. Empty (or absent) until a promotion writes into it, so
+# a fresh checkout behaves exactly as the code says. Applied LAST, so it loses to
+# the environment, to a profile and to an arm — it is the floor, not an override.
+BLOG_BASE_ENV="${BLOG_BASE_ENV:-$BLOG_REPO_DIR/profiles/base.env}"
+[ -f "$BLOG_BASE_ENV" ] && { blog_apply_profile "$BLOG_BASE_ENV" || exit 2; }
 
 # --- the tree ----------------------------------------------------------------
 # BLOG_ROOT is the data root. Everything below is derived from it and each one
@@ -117,6 +166,25 @@ ARCHIVE="${BLOG_ARCHIVE:-$VAULT/Archive}"
 TRASH="$POSTS/Discarded"
 REJECTED="$POSTS/Rejected"
 PROVENANCE="$POSTS/.provenance"
+
+# Where THIS run's suggestions land, and the only pool it curates or evicts
+# from. The base keeps the folder it always had, so nothing about reading on the
+# phone changes when no experiment is running; an arm gets a folder of its own,
+# which is the whole point — you see at a glance which pile a post came from.
+# Keep/, Discarded/ and Rejected/ stay shared: a post's arm rides in its
+# frontmatter, so moving it out of the pool never loses the attribution, and
+# promotion does not have to reshuffle folders you have already judged.
+if [ -n "$BLOG_ARM" ]; then POOL="$POSTS/$BLOG_ARM"; else POOL="$POSTS"; fi
+ARMS_TSV="${ARMS_TSV:-$LOGS/arms.tsv}"
+
+# The live arms, newest last: name <TAB> created <TAB> status <TAB> note.
+# `active` is the only status that runs; promoted and retired arms stay in the
+# file because the point of a registry is that you can read it in three months
+# and know what you already tried.
+blog_active_arms() {
+  [ -f "$ARMS_TSV" ] || return 0
+  awk -F'\t' '$3 == "active" && $1 !~ /^#/ { print $1 }' "$ARMS_TSV"
+}
 
 # Ledgers and stamps.
 PROCESSED="$LOGS/processed.tsv"
@@ -181,8 +249,28 @@ NOTIFY="${NOTIFY:-$BLOG_REPO_DIR/bin/notify.sh}"
 # as the blunt override it always was — process.sh and reclean.sh read
 # CLEANUP_MODEL, suggest.sh reads CURATE_MODEL — except for the typo pass,
 # which has never followed CLAUDE_MODEL and still doesn't.
-CLEANUP_MODEL="${CLEANUP_MODEL:-${CLAUDE_MODEL:-claude-sonnet-5}}"
-CURATE_MODEL="${CURATE_MODEL:-${CLAUDE_MODEL:-claude-opus-5}}"
+#
+# Precedence, highest first:
+#   1. the stage key from the ENVIRONMENT   CURATE_MODEL=x bin/suggest.sh
+#   2. CLAUDE_MODEL from the ENVIRONMENT    the blunt override, as it always was
+#   3. the stage key from the PROFILE
+#   4. CLAUDE_MODEL from the PROFILE
+#   5. the default
+# By the time this runs, 1 and 3 are the same variable — a profile exports into
+# this shell — which is why the flags above were taken before it was applied.
+# Without them a profile naming CURATE_MODEL would silently outrank a
+# CLAUDE_MODEL on the command line, and the environment would stop being the
+# thing that wins, which is the one rule this file promises everywhere else.
+blog_model() {
+  local from_env="$1" resolved="$2" default="$3"
+  if [ -n "$from_env" ];               then printf '%s' "$resolved"; return 0; fi
+  if [ -n "$BLOG_ENV_CLAUDE_MODEL" ];  then printf '%s' "$CLAUDE_MODEL"; return 0; fi
+  if [ -n "$resolved" ];               then printf '%s' "$resolved"; return 0; fi
+  printf '%s' "${CLAUDE_MODEL:-$default}"
+}
+CLEANUP_MODEL="$(blog_model "$BLOG_ENV_CLEANUP_MODEL" "${CLEANUP_MODEL:-}" claude-sonnet-5)"
+CURATE_MODEL="$(blog_model "$BLOG_ENV_CURATE_MODEL"  "${CURATE_MODEL:-}"  claude-opus-5)"
+# The typo pass has never followed CLAUDE_MODEL and still doesn't.
 TYPO_MODEL="${TYPO_MODEL:-claude-sonnet-5}"
 
 # --- knobs: process.sh ----------------------------------------------------------
@@ -236,9 +324,15 @@ SELF_NAME="${SELF_NAME:-Christian}"
 # copy (bin/ab.sh seeds one), and the live run is unaffected because BLOG_ROOT
 # is the repo.
 ALIASES="${ALIASES:-$BLOG_ROOT/private/aliases.tsv}"
-RESERVE_F="${RESERVE_F:-Judith Helena Ronja Merle Frida Carla Teresa Bianca Sofia Irene Livia Paola Zoe Selin Aylin Esra Noemi Linnea Greta Elif Sanne Rosa Alma Leonie Tilda Edith Runa Amara}"
-RESERVE_M="${RESERVE_M:-Anton Bruno Dario Fabio Georg Henrik Ivo Kilian Lorenz Matteo Nils Oskar Pavel Quentin Ruben Stefan Tobias Umberto Wim Yannick Aldo Boris Cem Darius Enzo Farid}"
-RESERVE_X="${RESERVE_X:-Kim Luca Toni Micha Rowan Sage Noor Eli}"
+# The reserve alias pools the name scout draws from. Hard assignments, NOT
+# overridable: they are on the privacy path, not the experiment path, and they
+# are deliberately absent from the fingerprint — so an override would change
+# which pseudonym a real person is given while leaving no trace in any artifact.
+# There is no experiment that wants this, and a stray exported RESERVE_F in a
+# shell should never reach the alias map.
+RESERVE_F="Judith Helena Ronja Merle Frida Carla Teresa Bianca Sofia Irene Livia Paola Zoe Selin Aylin Esra Noemi Linnea Greta Elif Sanne Rosa Alma Leonie Tilda Edith Runa Amara"
+RESERVE_M="Anton Bruno Dario Fabio Georg Henrik Ivo Kilian Lorenz Matteo Nils Oskar Pavel Quentin Ruben Stefan Tobias Umberto Wim Yannick Aldo Boris Cem Darius Enzo Farid"
+RESERVE_X="Kim Luca Toni Micha Rowan Sage Noor Eli"
 
 # --- identity ------------------------------------------------------------------
 blog_sha256() {
@@ -260,7 +354,7 @@ CLEANUP_MODEL CURATE_MODEL TYPO_MODEL
 STRUCTURE SYNC_KEEP_DAYS
 WHISPER_LANG WHISPER_MARKS WHISPER_CONF_LOW WHISPER_CONF_VLOW
 MAX_LONG MAX_SHORT MAX_NEW TRASH_DAYS CORPUS_MAX HISTORY_LINES ARCHIVE_DAYS
-VERBATIM_MIN GLUE_MAX_WORDS NEW_SLACK_EVERY GATE_MODE REJECT_DAYS
+VERBATIM_MIN GLUE_MAX_WORDS NEW_SLACK_EVERY GATE_MODE GATE_TRACE REJECT_DAYS
 REUSE_MIN_WORDS REUSE_DROP_PCT
 TYPO_FIX TYPO_MIN_LEN TYPO_MAX_PCT
 NAME_SCAN
@@ -329,6 +423,9 @@ blog_fingerprint() {
 # that resolve alike are visibly the same variant.
 blog_variant() {
   local name="${BLOG_VARIANT:-}"
+  # A live arm names itself: reports and the pool statistics are read by arm,
+  # so "B:9fc3" beats "default:9fc3" for something you will be looking at daily.
+  if [ -z "$name" ] && [ -n "$BLOG_ARM" ]; then name="$BLOG_ARM"; fi
   if [ -z "$name" ]; then
     if [ -n "$BLOG_PROFILE_FILE" ]; then
       name="$(basename "$BLOG_PROFILE_FILE")"; name="${name%.env}"
@@ -360,7 +457,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     paths)
       printf 'BLOG_REPO_DIR=%s\n' "$BLOG_REPO_DIR"
       printf 'BLOG_ROOT=%s\n'     "$BLOG_ROOT"
-      for v in SYNC VAULT POSTS ARCHIVE DRAFTS WORK LOGS PROMPTS PROMPTS_DIR \
+      printf 'BLOG_ARM=%s\n' "${BLOG_ARM:-(base)}"
+      for v in SYNC VAULT POSTS POOL ARCHIVE DRAFTS WORK LOGS PROMPTS PROMPTS_DIR ARMS_DIR \
                CLEANUP_PROMPT STRUCTURE_PROMPT SUGGEST_PROMPT CURATE_PROMPT \
                TYPO_PROMPT NAMES_PROMPT ANCHOR CLEANUP_DIRECTIVE CURATE_DIRECTIVE \
                PERSONAS ALIASES; do

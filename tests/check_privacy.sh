@@ -15,6 +15,10 @@
 #   4. no staged text may contain a private marker: a work email address, or a
 #      real name listed in private/aliases.tsv (read at run time so no name is
 #      ever embedded in this script; silently skipped where the file is absent)
+#   5. no staged text may quote a draft bundle's name or a note's title. Both
+#      are built from the author's own first words, so a list of them is a list
+#      of his phrasing — which is exactly how material once reached a public
+#      repo through a file that contained no prose at all
 set -u
 cd "$(git rev-parse --show-toplevel)"
 fail=0
@@ -59,6 +63,40 @@ if [ -f private/aliases.tsv ]; then
     hits=$(git grep -I --cached -l -wF "$real" -- . 2>/dev/null || true)
     [ -z "$hits" ] || err "real name '$real' (private/aliases.tsv) appears in: $(echo "$hits" | tr '\n' ' ')"
   done < private/aliases.tsv
+fi
+
+# 5. the author's own words, in any form — including the ones that do not look
+# like content. A draft bundle's directory name is built from the first words of
+# what he actually said, and a note's filename IS its first line, so a list of
+# them is a list of his phrasing and his recording dates. That is how a
+# perfectly innocent-looking "which files are the test set" manifest leaked real
+# material into a public repo once, which is why this layer exists.
+#
+# Only distinctive names are checked: some notes are called "a" or "1", and a
+# guard that blocks those blocks everything. A bundle slug always carries its
+# date, and a note title needs three words and twelve characters before it
+# counts as identifying.
+if [ -d drafts ] || [ -d sync/Obsidian ]; then
+  marker_hit() {   # $1 = the string, $2 = what to call it
+    local hits
+    hits=$(git grep -I --cached -l -F "$1" -- . 2>/dev/null || true)
+    # The example manifest is allowed to describe the format; it must not
+    # contain a real one. Nothing else is exempt.
+    [ -z "$hits" ] || err "$2 '$1' appears in staged content: $(echo "$hits" | tr '\n' ' ')"
+  }
+  for d in drafts/*/; do
+    [ -d "$d" ] || continue
+    b=$(basename "$d")
+    case "$b" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*) marker_hit "$b" "draft bundle name" ;; esac
+  done
+  for f in sync/Obsidian/*.md sync/Obsidian/Archive/*.md; do
+    [ -f "$f" ] || continue
+    t=$(basename "$f" .md)
+    [ "${#t}" -ge 12 ] || continue
+    words=$(printf '%s\n' "$t" | wc -w)
+    [ "$words" -ge 3 ] || continue
+    marker_hit "$t" "note title"
+  done
 fi
 
 if [ "$fail" -ne 0 ]; then

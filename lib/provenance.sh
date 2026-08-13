@@ -51,9 +51,20 @@ prov_kv()  { printf '"%s": "%s"' "$(prov_json_escape "$1")" "$(prov_json_escape 
 prov_num() { printf '"%s": %s' "$(prov_json_escape "$1")" "${2:-0}"; }
 
 # Words in a file (whitespace-separated, blank lines ignored).
+#
+# The count goes through a variable rather than straight to stdout because
+# `grep -c` prints its 0 AND exits 1 when nothing matches: a bare `|| printf 0`
+# emits a SECOND zero, and "0\n0" reaches meta.json as invalid JSON and
+# prov_churn as an arithmetic syntax error. An empty or whitespace-only file is
+# not an error here — it is a legitimate answer, and it is zero.
 prov_words() {
   [ -f "${1:-}" ] || { printf 0; return 0; }
-  tr -s '[:space:]' '\n' < "$1" | grep -c '[^[:space:]]' || printf 0
+  local n
+  n="$(tr -s '[:space:]' '\n' < "$1" | grep -c '[^[:space:]]' || true)"
+  case "${n:-0}" in
+    ''|*[!0-9]*) printf 0 ;;
+    *)           printf '%s' "$n" ;;
+  esac
 }
 
 # How much of the text the transform actually moved: the word-level edit
@@ -117,12 +128,25 @@ prov_record() {
 prov_write_meta() {
   local dir="$1" stage="$2" audio="$3" audio_sha="$4" verbatim="$5" cleaned="$6"
   local in_chars="${7:-0}" out_chars="${8:-0}" seconds="${9:-0}"
-  local model="$CLEANUP_MODEL" first_seen=""
+  local model="$CLEANUP_MODEL" first_seen="" previous=""
 
   # A recleaned bundle keeps the timestamp it first appeared with: the archive
   # date is a fact about the recording, not about the last time a prompt changed.
+  # Two more things are inherited rather than overwritten, for the same reason:
+  #
+  #   the audio's identity — a fact about the recording, and the only join key
+  #   back to logs/processed.tsv. A caller that does not have the file at hand
+  #   (reclean.sh works from the bundle, not from sync/) must not erase it by
+  #   passing nothing;
+  #   the variant that came before — because rewriting cleaned.md means this
+  #   record now describes today's configuration, and the one it replaced would
+  #   otherwise vanish without trace, even though cleaned.orig.md still holds
+  #   the text it produced.
   if [ -f "$dir/meta.json" ]; then
     first_seen="$(sed -n 's/.*"first_seen": "\([^"]*\)".*/\1/p' "$dir/meta.json" | head -1)"
+    previous="$(sed -n 's/.*"variant": "\([^"]*\)".*/\1/p'    "$dir/meta.json" | head -1)"
+    [ -n "$audio" ]     || audio="$(sed -n 's/.*"audio": "\([^"]*\)".*/\1/p' "$dir/meta.json" | head -1)"
+    [ -n "$audio_sha" ] || audio_sha="$(sed -n 's/.*"audio_sha256": "\([^"]*\)".*/\1/p' "$dir/meta.json" | head -1)"
   fi
   [ -n "$first_seen" ] || first_seen="$(prov_now)"
 
@@ -135,6 +159,8 @@ prov_write_meta() {
     printf '  %s,\n' "$(prov_kv commit "$(blog_git_commit)")"
     printf '  %s,\n' "$(prov_kv variant "$(blog_variant)")"
     printf '  %s,\n' "$(prov_kv fingerprint "$(blog_fingerprint)")"
+    [ -z "$previous" ] || [ "$previous" = "$(blog_variant)" ] \
+      || printf '  %s,\n' "$(prov_kv replaced_variant "$previous")"
     printf '  %s,\n' "$(prov_kv model "$model")"
     printf '  "prompts": {\n'
     prov_prompt_json cleanup   "$CLEANUP_PROMPT";   printf ',\n'
@@ -168,6 +194,10 @@ prov_write_meta() {
 # every post, experiment or not: a pool that is only sometimes labelled is a
 # pool that cannot be scored.
 prov_frontmatter() {
+  # The arm is its own key, not just part of `variant:`. build_claimed scopes
+  # sentence reuse by it, and the daily statistics group by it, so it has to
+  # survive a post being moved into Keep/ by hand — which frontmatter does.
+  printf 'arm: %s\n' "${BLOG_ARM:-base}"
   printf 'variant: %s\n' "$(blog_variant)"
   printf 'persona: %s\n' "${1:-}"
   printf 'run: %s\n'     "$BLOG_RUN_ID"

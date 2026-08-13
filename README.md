@@ -90,13 +90,17 @@ blog-pipeline/
 │   ├── note.sh        # text-note capture from the terminal (writes the vault)
 │   ├── reclean.sh     # re-run cleanup over existing bundles (prompt upgrades)
 │   ├── stats.sh       # the pipeline at a glance; writes STATS.md
+│   ├── arm.sh         # live A/B arms: new / try / run / status / promote / retire
 │   ├── ab.sh          # the experiment runner (offline A/B in sandboxes)
 │   ├── ab-transcribe.sh # frozen/cached transcripts for experiments
 │   ├── score.sh       # the online metric: what you moved into Keep/
 │   └── notify.sh      # notify-send / osascript wrapper
 ├── lib/
 │   └── config.sh      # every path, prompt, model and knob, resolved in one place
+├── arms/              # live A/B arms: one <name>.env of deltas each
+├── samples/notes/     # committed invented corpus for `arm.sh try` (reproducible)
 ├── profiles/          # variants: one profile per experiment, plus
+│   ├── base.env       #   what the base has been promoted to (written by arm.sh)
 │   ├── default.env    #   the full inventory of knobs, at their defaults
 │   ├── directives/    #   the third prompt slot: what THIS run wants
 │   ├── personas/      #   name -> directive, for a multi-voice pool
@@ -116,6 +120,7 @@ blog-pipeline/
 │                      # check_typo_gate.sh: the typo pass only respells words
 │                      # check_defaults.sh: the config layer changes nothing
 │                      # check_gate.sh: the gate's experiment seams change no verdict
+│                      # check_provenance.sh: meta.json stays valid; reclean keeps identity
 ├── .githooks/         # pre-commit hook running that check (wired by install.sh)
 ├── watcher/           # systemd user units + (untested) macOS launchd plists
 ├── sync/              # THE Syncthing folder (the phone calls it /blog)
@@ -328,6 +333,63 @@ says so, while keeping its original `first_seen`), and a `Keep/` post whose
 report has to be reconstructed is honestly labelled `variant: pre-experiment`
 rather than being counted as whatever runs today.
 
+## Live A/B arms (`bin/arm.sh`)
+
+An **arm** is an experiment that runs beside the base every day, into a folder
+of its own, until you promote it or bin it.
+
+```sh
+bin/arm.sh new B CURATE_MODEL=claude-sonnet-5 --note "is Opus worth it?"
+bin/arm.sh try B            # against samples/notes/ in a sandbox — reproducible
+bin/arm.sh run B            # generate into the real pool right now
+bin/arm.sh list             # what exists, and what each one changes
+bin/arm.sh status           # accept rate per arm (also in STATS.md)
+bin/arm.sh promote B        # B's deltas become the base
+bin/arm.sh retire C         # C stops; its pool goes to Discarded/
+```
+
+The daily job runs the base first, then every active arm, against the **same
+corpus** — so what differs between `Posts/` and `Posts/B/` is the configuration
+and nothing else. You read both folders on the phone and move what you like into
+`Keep/`.
+
+Three decisions worth knowing, because they are what make the comparison mean
+anything:
+
+- **Claims are arm-scoped.** A sentence spent by one arm's kept post is spent for
+  that arm only. Otherwise whichever arm you happened to like first would
+  quietly starve the other of material, and the two pools would stop answering
+  the same question.
+- **`Keep/`, `Discarded/` and `Rejected/` stay shared.** You judge a post by
+  moving it, and its arm rides in its frontmatter — so the attribution survives
+  the move, and promoting an arm never reshuffles anything you already decided.
+- **An arm's posts carry its name in the filename as well as the folder**
+  (`2026-08-13-B-short-….md`), because `.provenance/` is flat and two arms must
+  not fight over one report.
+
+`bin/arm.sh promote` writes `profiles/base.env`, which `lib/config.sh` applies as
+the floor under every run — below the environment, a profile and an arm, so it
+changes the default without taking anyone's override away. Retired and promoted
+arms stay in `logs/arms.tsv`: the point of a registry is reading it in three
+months and knowing what you already tried.
+
+`samples/notes/` is a committed corpus of six **invented** notes written to
+converge in three pairs. `bin/arm.sh try` runs against it, so an experiment is
+repeatable on any machine and on a laptop with no personal data on it at all.
+
+For a realistic test, `bin/arm.sh samples` builds `samples/real/` from your own
+recordings and notes, and `bin/arm.sh try <arm> --full` runs the whole chain —
+transcription, cleanup, then the curator — so an arm that changes the cleanup
+model or prompt is actually exercised. Transcription answers from a cache keyed
+by audio hash *and* whisper settings, seeded from the transcripts your bundles
+already hold, so it is instant until you change a whisper setting.
+
+**None of that is committed, including the list of which files you chose**: a
+bundle name is built from the first words you said, so the manifest is your
+writing too. `samples/real.list.example` is the committed template and every
+entry in it is invented. `tests/check_privacy.sh` enforces this — it fails the
+commit if any staged file quotes a draft bundle name or a note title.
+
 ## Experiments (`bin/ab.sh`)
 
 Two ways to find out whether a change is an improvement, and they answer
@@ -505,6 +567,10 @@ a profileless run still resolves to exactly the numbers below.
   it belongs in a sandbox: a variant told to rewrite more is otherwise wiped out
   by its own gate and the experiment measures nothing. The summary line says
   out loud what the verdict would have been, and `logs/gate.tsv` keeps it.
+  **`suggest.sh` refuses to start in `report` mode unless the tree is re-rooted**
+  (`BLOG_ROOT` elsewhere, which `bin/ab.sh` always does) — a gate that does not
+  reject would otherwise write model prose straight into the pool in your voice,
+  indistinguishable afterwards from the posts you actually wrote.
 - `GATE_TRACE` (0) — annotate every tweaked/glue/new sentence in the provenance
   report with its nearest corpus sentence and a word-level diff, so you can read
   exactly what the model wrote rather than stitched. Forced on by `report` mode.

@@ -135,5 +135,37 @@ case "$(printf '%s\n' "$rep" | tail -1)" in
   *)      bad "the verdict is still the last line" "$(printf '%s\n' "$rep" | tail -1)" ;;
 esac
 
+# --- 5. report mode cannot reach the live tree ----------------------------------
+# The knob that switches enforcement off is the one thing in this repo that can
+# put model prose into the pool wearing the author's voice. It is refused
+# outright against the live tree, and the refusal has to happen before anything
+# is written — so this runs the real script and checks that nothing moved.
+#
+# No model in the loop either way: the live-tree run stops at the guard, and the
+# sandbox run has an empty corpus (and CLAUDE_BIN=/bin/false, which turns any
+# call that did happen into a failure rather than a charge).
+out="$(GATE_MODE=report bash bin/suggest.sh 2>&1)"; rc=$?
+if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'REFUSING'; then
+  ok "GATE_MODE=report is refused against the live tree"
+else
+  bad "GATE_MODE=report is refused against the live tree" "exit $rc" "$out"
+fi
+# It must refuse before the lock and before the scratch dir the run works in.
+if [ -z "$(find work -maxdepth 1 -name 'sugg.*' -newermt '-20 seconds' 2>/dev/null)" ]; then
+  ok "the refusal happens before any work is started"
+else
+  bad "the refusal happens before any work is started"
+fi
+
+mkdir -p "$SB/root/sync/Obsidian" "$SB/root/drafts" "$SB/root/logs" \
+         "$SB/root/work" "$SB/root/private"
+out="$(BLOG_ROOT="$SB/root" GATE_MODE=report CLAUDE_BIN=/bin/false NOTIFY=/bin/true \
+       bash bin/suggest.sh 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -q 'REFUSING'; then
+  bad "a sandboxed run may still use report mode" "$out"
+else
+  ok "a sandboxed run may still use report mode"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -18,16 +18,24 @@
 #   - an editor session left empty writes nothing
 #
 # Optional environment:
-#   NOTES_DIR   where notes live   (default: <repo>/sync/Obsidian)
+#   NOTES_DIR   where notes live   (default: the vault under BLOG_ROOT)
 #   EDITOR      editor to open     (default: first of nvim, vim, nano)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=../lib/config.sh
+. "$REPO_DIR/lib/config.sh"
 # The vault inside the shared Syncthing folder. Notes are its top-level .md
 # files; Posts/ (generated suggestions) is a subdirectory, so the non-recursive
 # globs below list and search notes only.
-NOTES_DIR="${NOTES_DIR:-$REPO_DIR/sync/Obsidian}"
+#
+# Through $VAULT rather than the repo, so a re-rooted tree takes this script
+# with it: writing a note under BLOG_ROOT=<sandbox> used to land in the LIVE
+# vault, which is the one thing re-rooting is supposed to make impossible.
+# NOTES_DIR still wins outright — it predates BLOG_ROOT and people have it in
+# their fingers.
+NOTES_DIR="${NOTES_DIR:-$VAULT}"
 
 die() { printf '\033[1;31m[note]\033[0m %s\n' "$*" >&2; exit 1; }
 

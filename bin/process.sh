@@ -312,10 +312,16 @@ process_one() {
   #     bundle, experiment or not — a run with no profile is still a variant,
   #     it is just the one called `default`. A bundle without meta.json is one
   #     that predates this step (see lib/provenance.sh).
+  #     Both are non-fatal, and both say so when they fail: the bundle already
+  #     exists at this point and is worth keeping either way, but a silently
+  #     missing record is exactly the failure the experiment layer cannot
+  #     survive — it would read later as "this bundle predates provenance".
   prov_write_meta "$dest" process "$audio" "$hash" \
     "$dest/verbatim.md" "$dest/cleaned.md" \
-    "$clean_in" "$clean_out" "$clean_secs"
-  prov_record draft "$dest" "" "audio:${hash:0:12},verbatim:$(blog_file_hash "$dest/verbatim.md" | cut -c1-12)"
+    "$clean_in" "$clean_out" "$clean_secs" \
+    || log "WARN could not write meta.json for $origname"
+  prov_record draft "$dest" "" "audio:${hash:0:12},verbatim:$(blog_file_hash "$dest/verbatim.md" | cut -c1-12)" \
+    || log "WARN could not record provenance for $origname"
 
   # 5b. the transcript, next to the recording in sync/, sharing its basename so
   #     the pair is obvious in a file browser and is reaped together. Derived

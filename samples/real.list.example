@@ -1,0 +1,36 @@
+# samples/real.list.example — TEMPLATE. Every entry below is INVENTED.
+#
+# Copy it to samples/real.list (which is gitignored) and put your own material
+# in it. Nothing of yours belongs in this file: it is committed, the repo is
+# public, and a bundle slug is made of the first words you actually said.
+#
+#   cp samples/real.list.example samples/real.list
+#   $EDITOR samples/real.list          # ls drafts/ and sync/Obsidian/ for names
+#   bin/arm.sh samples                 # builds samples/real/ (also gitignored)
+#
+# Two columns, tab-separated: `memo` names a directory in drafts/, `note` names
+# a file in sync/Obsidian/ (without the .md).
+#
+# Pick for CONVERGENCE, not for quality. A test corpus is only useful if there
+# is genuinely something in it to find, so choose material that circles the same
+# problem from more than one direction — ideally some dictated and some typed,
+# since that pairing is what the curator is hunting for. Two or three clusters
+# of three or four pieces each is plenty; include one long recording if you want
+# long posts exercised.
+#
+# --- everything below is lorem ipsum, and is meant to be replaced ------------
+#
+# Cluster A — lorem ipsum dolor sit amet
+memo	2026-01-15-lorem-ipsum-dolor-sit-amet
+memo	2026-01-16-consectetur-adipiscing-elit
+memo	2026-01-17-sed-do-eiusmod-tempor
+note	Lorem ipsum placeholder note one
+note	Lorem ipsum placeholder note two
+#
+# Cluster B — ut enim ad minim veniam
+memo	2026-01-18-ut-enim-ad-minim-veniam
+memo	2026-01-19-quis-nostrud-exercitation
+note	Lorem ipsum placeholder note three
+#
+# The long one — duis aute irure dolor in reprehenderit
+memo	2026-01-20-duis-aute-irure-dolor

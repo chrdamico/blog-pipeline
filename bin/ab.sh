@@ -30,6 +30,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# The names of the variables already exported when this script started —
+# captured BEFORE lib/config.sh runs, because sourcing it applies any profile
+# and exports keys of its own, after which the two are indistinguishable.
+# check_env_leaks (below) is the whole reason this exists.
+AB_INHERITED_ENV="$(env | sed 's/=.*//' | LC_ALL=C sort -u)"
+
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
 
@@ -42,7 +49,7 @@ BASELINE="$EVAL/baseline"
 EXPERIMENTS="$EVAL/experiments"
 
 # The one column list, so the writer and every reader agree.
-METRIC_COLS="variant fixture rep status seconds calls in_chars out_chars churn_pct in_words out_words unsure_in unsure_leak candidates rejected verbatim tweaked glue new longs shorts"
+METRIC_COLS="variant fixture rep status seconds calls in_chars out_chars churn_pct in_words out_words unsure_in unsure_leak candidates rejected verbatim tweaked glue new pool_long pool_short"
 
 die() { printf 'ab: %s\n' "$*" >&2; exit 1; }
 say() { printf '%s\n' "$*" >&2; }
@@ -233,11 +240,27 @@ run_one() {
     "AB_FIXTURE=$MEMOS/$fixture"
   )
   # Variant environment last, so an .exp can override anything above except the
-  # root — which it must not, or the experiment escapes its sandbox.
+  # tree — which it must not, or the experiment escapes its sandbox.
+  #
+  # Split with eval rather than word-splitting, so a value may contain spaces:
+  # the .exp file is sourced already, its assignments are code either way, and
+  # VARIANT_x_ENV='SELF_NAME="Ada Lovelace"' should mean what it looks like.
+  local -a extra=()
+  local raw; raw="$(variant_env "$variant")"
+  if [ -n "$raw" ]; then
+    eval "extra=($raw)" 2>/dev/null \
+      || die "$variant: VARIANT_${variant}_ENV is not a usable assignment list: $raw"
+  fi
+  # Every path in the tree hangs off a BLOG_* variable, and ALIASES names the
+  # one file outside it a run may WRITE (the name scout extends the alias map).
+  # Pinning any of them from an .exp would point a sandboxed run at the live
+  # data, which is the single thing this runner exists to make impossible — so
+  # the whole prefix is refused rather than a list of the paths thought of today.
   local kv
-  for kv in $(variant_env "$variant"); do
-    case "$kv" in BLOG_ROOT=*|BLOG_SYNC=*|BLOG_DRAFTS=*|BLOG_LOGS=*)
-      die "$variant: an experiment may not re-root the tree ($kv)" ;;
+  for kv in "${extra[@]}"; do
+    case "$kv" in
+      BLOG_*=*|ALIASES=*)
+        die "$variant: an experiment may not repoint the tree ($kv) — use a profile" ;;
     esac
     envs+=("$kv")
   done
@@ -258,6 +281,19 @@ run_one() {
   ended="$(date +%s)"
   [ "$status" = ok ] || say "  ! $variant/$fixture/rep$rep failed — see $log"
   collect_metrics "$stage" "$variant" "$fixture" "$rep" "$root" "$status" "$((ended - started))"
+}
+
+# Every gate report this run produced, one path per line. An accepted
+# candidate's classification lives beside the pool in Posts/.provenance/<id>.md;
+# a rejected one's is appended to the copy kept in Posts/Rejected/. Both are
+# found through logs/provenance.tsv, which is the only record that distinguishes
+# what the run wrote from what the fixture came with.
+report_paths() {
+  local root="$1" ptsv="$1/logs/provenance.tsv"
+  [ -s "$ptsv" ] || return 0
+  awk -F'\t' -v root="$root" '
+    $3 == "candidate" { p = $4; sub(/[^\/]*$/, ".provenance/&", p); print root "/" p; next }
+    $3 == "rejected"  { print root "/" $4 }' "$ptsv"
 }
 
 # One TSV row per run. Everything here is read back out of the sandbox — the
@@ -285,20 +321,33 @@ collect_metrics() {
       unsure_leak="$( { grep -o '⟦unsure⟧' "$b/cleaned.md" 2>/dev/null || true; } | wc -l | tr -d ' ')"
     fi
   else
-    candidates="$(find "$root/sync/Obsidian/Posts" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-    rejected="$(find "$root/sync/Obsidian/Posts/Rejected" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
-    # `|| true` throughout: set -o pipefail turns "grep found nothing" into a
-    # failed pipeline, and an empty pool is a result, not an error.
-    longs="$( { grep -l '^kind: long$'  "$root"/sync/Obsidian/Posts/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
-    shorts="$( { grep -l '^kind: short$' "$root"/sync/Obsidian/Posts/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
-    # The per-sentence classification, summed over everything this run produced —
+    # Counted from the sandbox's OWN provenance ledger, not from the tree. The
+    # tree also holds the seeded snapshot — the pool, the rejections and the
+    # provenance reports as they stood when the fixture was frozen — and counting
+    # those would add the fixture's whole history to every variant's totals,
+    # burying the handful of posts the run actually produced. The ledger has one
+    # row per artifact THIS run wrote, and nothing else.
+    local ptsv="$root/logs/provenance.tsv"
+    candidates=0; rejected=0
+    if [ -s "$ptsv" ]; then
+      candidates="$(awk -F'\t' '$3 == "candidate"' "$ptsv" | wc -l | tr -d ' ')"
+      rejected="$(awk -F'\t' '$3 == "rejected"'  "$ptsv" | wc -l | tr -d ' ')"
+    fi
+    # The per-sentence classification over the reports this run produced —
     # accepted and rejected alike, because a variant that gets rejected a lot is
     # telling you something and dropping its sentences would hide it.
     read -r verbatim tweaked glue new < <(
-      { cat "$root"/sync/Obsidian/Posts/.provenance/*.md \
-            "$root"/sync/Obsidian/Posts/Rejected/*.md 2>/dev/null || true; } \
+      report_paths "$root" \
+      | while IFS= read -r p; do [ -f "$p" ] && cat "$p"; done \
       | awk '/^- VERBATIM /{v++} /^- TWEAKED /{t++} /^- GLUE /{g++} /^- NEW /{n++}
              END { printf "%d %d %d %d\n", v, t, g, n }')
+    # Pool composition is the one honest END-STATE number here: the cap applies
+    # to the whole pool, seeded posts included, and what survives curation is
+    # what the phone would show. Hence pool_*, next to the per-run counts above.
+    # `|| true`: pipefail turns "grep found nothing" into a failed pipeline, and
+    # an empty pool is a result, not an error.
+    longs="$( { grep -l '^kind: long$'  "$root"/sync/Obsidian/Posts/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
+    shorts="$( { grep -l '^kind: short$' "$root"/sync/Obsidian/Posts/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
   fi
 
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -309,8 +358,36 @@ collect_metrics() {
     >> "$RUNS/$EXP_NAME/metrics.tsv"
 }
 
+# The environment outranks a profile — deliberately, everywhere in this
+# pipeline. That makes an exported knob in the shell that launches an experiment
+# invisible poison: it overrides EVERY variant's profile at once, so the run
+# dutifully compares two configurations that were never different, and the
+# report says nothing about it beyond two variants that happen to share a
+# fingerprint. An experiment must be launched from a clean shell, and this is
+# cheaper to enforce than to notice afterwards.
+#
+# Checked against the names captured before lib/config.sh was sourced, and
+# derived from the fingerprint key list so it cannot drift from what actually
+# defines a variant.
+check_env_leaks() {
+  local k leaks=""
+  for k in $BLOG_FINGERPRINT_KEYS CLAUDE_MODEL PROMPTS_DIR \
+           CLEANUP_DIRECTIVE CURATE_DIRECTIVE PERSONAS BLOG_PROFILE; do
+    printf '%s\n' "$AB_INHERITED_ENV" | grep -qx -- "$k" \
+      && leaks="${leaks:+$leaks }$k"
+  done
+  [ -z "$leaks" ] && return 0
+  printf 'ab: these are set in your environment: %s\n' "$leaks" >&2
+  printf '    The environment outranks a profile, so each of them would override\n' >&2
+  printf '    EVERY variant of this experiment and the comparison would measure\n' >&2
+  printf '    nothing. Unset them and run again; anything a variant needs belongs\n' >&2
+  printf '    in its profile, or in VARIANT_<name>_ENV in the .exp file.\n' >&2
+  exit 1
+}
+
 cmd_run() {
   [ "$#" -ge 1 ] || die "usage: ab.sh run <experiment>"
+  check_env_leaks
   load_experiment "$1"; shift
   local fixtures="$EXP_FIXTURES" reps="$EXP_REPS"
   while [ "$#" -gt 0 ]; do
@@ -427,6 +504,13 @@ summarize_metrics() {
     {
       variant = $1
       if (!(variant in seen)) { seen[variant] = 1; order[++nv] = variant }
+      runs[variant]++
+      # A failed run is not a cheap fast one. Its row carries whatever the
+      # sandbox managed to produce before it died — usually zeros — and
+      # averaging that in makes a variant that crashes look like a variant that
+      # is efficient. The counts are reported instead, on their own line.
+      if ($4 != "ok") { failed[variant]++; next }
+      okruns[variant]++
       for (i = 5; i <= ncol; i++) {
         if ($i == "-" || $i == "") continue
         key = i SUBSEP variant
@@ -442,6 +526,13 @@ summarize_metrics() {
       printf " |\n|---"
       for (v = 1; v <= nv; v++) printf "|---"
       printf "|\n"
+      # First row, before any mean: how much of this variant actually ran. A
+      # column averaged over one surviving repetition is not the same claim as
+      # one averaged over three, and the reader should see that first.
+      printf "| runs ok/total"
+      for (v = 1; v <= nv; v++)
+        printf " | %d/%d", okruns[order[v]] + 0, runs[order[v]] + 0
+      printf " |\n"
       for (i = 5; i <= ncol; i++) {
         if (!(i in used)) continue
         printf "| %s", name[i]
@@ -484,24 +575,34 @@ side_by_side() {
     done
     shopt -u nullglob
   else
+    # Listed from the sandbox's provenance ledger, NOT from its pool. The pool
+    # also holds the seeded snapshot — every post the fixture was frozen with —
+    # and printing those under a variant's heading would credit it with choices
+    # it never made. The ledger holds exactly what this run proposed.
     local rep
     shopt -s nullglob
     for v in $EXP_VARIANTS; do
       printf '### %s\n\n' "$v"
       for rep in "$dir/$v/corpus"/rep*/; do
         printf '**%s**\n\n' "$(basename "${rep%/}")"
-        local p
-        for p in "$rep/root/sync/Obsidian/Posts"/*.md; do
-          printf -- '- [%s] %s\n' "$(sed -n 's/^kind: //p' "$p" | head -1)" \
-                                  "$(sed -n 's/^title: //p' "$p" | head -1)"
-          local pv="$rep/root/sync/Obsidian/Posts/.provenance/$(basename "$p")"
-          [ -f "$pv" ] && printf '      %s\n' "$(grep '^gate:' "$pv" | tail -1)"
-        done
-        for p in "$rep/root/sync/Obsidian/Posts/Rejected"/*.md; do
-          printf -- '- REJECTED [%s] %s\n' "$(sed -n 's/^kind: //p' "$p" | head -1)" \
-                                           "$(sed -n 's/^title: //p' "$p" | head -1)"
-          printf '      %s\n' "$(sed -n 's/^rejected: //p' "$p" | head -1)"
-        done
+        local root="$rep/root" kind path p pv n=0
+        while IFS=$'\t' read -r kind path; do
+          p="$root/$path"
+          [ -f "$p" ] || continue
+          n=$((n + 1))
+          if [ "$kind" = rejected ]; then
+            printf -- '- REJECTED [%s] %s\n' "$(sed -n 's/^kind: //p' "$p" | head -1)" \
+                                             "$(sed -n 's/^title: //p' "$p" | head -1)"
+            printf '      %s\n' "$(sed -n 's/^rejected: //p' "$p" | head -1)"
+          else
+            printf -- '- [%s] %s\n' "$(sed -n 's/^kind: //p' "$p" | head -1)" \
+                                    "$(sed -n 's/^title: //p' "$p" | head -1)"
+            pv="$root/$(dirname "$path")/.provenance/$(basename "$p")"
+            [ -f "$pv" ] && printf '      %s\n' "$(grep '^gate:' "$pv" | tail -1)"
+          fi
+        done < <(awk -F'\t' '$3 == "candidate" || $3 == "rejected" { print $3 "\t" $4 }' \
+                   "$root/logs/provenance.tsv" 2>/dev/null)
+        [ "$n" -gt 0 ] || printf '(this run proposed nothing)\n'
         printf '\n'
       done
     done
@@ -638,9 +739,13 @@ cmd_list() {
   if [ -d "$MEMOS" ]; then
     local m
     shopt -s nullglob
+    local w
     for m in "$MEMOS"/*/; do
-      printf '  %-44s %s words\n' "$(basename "${m%/}")" \
-        "$(tr -s '[:space:]' '\n' < "${m}verbatim.md" 2>/dev/null | grep -c . || echo 0)"
+      # Through a variable, not `… | grep -c . || echo 0`: grep -c prints its
+      # zero AND exits 1, so the fallback would print a SECOND one and the line
+      # would wrap mid-table (the same trap lib/provenance.sh documents).
+      w="$(tr -s '[:space:]' '\n' < "${m}verbatim.md" 2>/dev/null | grep -c . || true)"
+      printf '  %-44s %s words\n' "$(basename "${m%/}")" "${w:-0}"
     done
     shopt -u nullglob
   fi

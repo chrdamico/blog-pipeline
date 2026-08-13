@@ -127,12 +127,42 @@ cat > "$SB/p.env" <<'PROFILE'
 
 MAX_NEW=2
 CURATE_MODEL=claude-sonnet-5
-RESERVE_X="Kim Luca"
+SELF_NAME="Ada Lovelace"
+RESERVE_X="Mallory Trudy"
 PROFILE
 eq "profile sets its delta" 2 "$(resolve MAX_NEW BLOG_PROFILE="$SB/p.env")"
 eq "profile leaves the rest" 8 "$(resolve MAX_SHORT BLOG_PROFILE="$SB/p.env")"
-eq "profile handles quotes" "Kim Luca" "$(resolve RESERVE_X BLOG_PROFILE="$SB/p.env")"
+eq "profile handles quotes" "Ada Lovelace" "$(resolve SELF_NAME BLOG_PROFILE="$SB/p.env")"
 eq "the environment outranks the profile" 5 "$(resolve MAX_NEW BLOG_PROFILE="$SB/p.env" MAX_NEW=5)"
+# Set-but-EMPTY is not an instruction. It used to beat the profile and then fall
+# through to the shipped default — neither of the two values anyone had in mind.
+eq "an empty variable yields to the profile" 2 "$(resolve MAX_NEW BLOG_PROFILE="$SB/p.env" MAX_NEW=)"
+
+# The alias pools are on the privacy path, not the experiment path: they decide
+# which pseudonym a real person is given, and they are deliberately absent from
+# the fingerprint, so an override would rename someone and leave no trace in any
+# artifact. Neither a profile nor the environment may touch them.
+eq "the alias pools ignore a profile" "$(resolve RESERVE_X)" \
+   "$(resolve RESERVE_X BLOG_PROFILE="$SB/p.env")"
+eq "the alias pools ignore the environment" "$(resolve RESERVE_X)" \
+   "$(resolve RESERVE_X RESERVE_X="Mallory Trudy")"
+
+# --- 4b. the per-stage models ----------------------------------------------------
+# CLAUDE_MODEL is the blunt override it has always been, and the environment
+# outranks a profile — which means an environment CLAUDE_MODEL has to outrank a
+# profile's per-stage key too. It resolves after the profile has already
+# exported that key, so the two look identical unless config.sh remembers which
+# one came from where.
+eq "the stage key wins in the environment" claude-haiku-4-5-20251001 \
+   "$(resolve CURATE_MODEL CLAUDE_MODEL=claude-opus-5 CURATE_MODEL=claude-haiku-4-5-20251001)"
+eq "CLAUDE_MODEL outranks a profile's stage key" claude-opus-5 \
+   "$(resolve CURATE_MODEL BLOG_PROFILE="$SB/p.env" CLAUDE_MODEL=claude-opus-5)"
+eq "a profile's stage key outranks the default" claude-sonnet-5 \
+   "$(resolve CURATE_MODEL BLOG_PROFILE="$SB/p.env")"
+eq "CLAUDE_MODEL alone still moves both stages" "claude-fable-5 claude-fable-5" \
+   "$(resolve CURATE_MODEL CLAUDE_MODEL=claude-fable-5) $(resolve CLEANUP_MODEL CLAUDE_MODEL=claude-fable-5)"
+eq "the typo pass never follows CLAUDE_MODEL" claude-sonnet-5 \
+   "$(resolve TYPO_MODEL CLAUDE_MODEL=claude-fable-5)"
 # The shipped inventory repeats the defaults, so running under it must resolve
 # to the same variant — that is what makes it safe documentation.
 eq "profiles/default.env is a no-op" "$(fp_of)" "$(fp_of BLOG_PROFILE=default)"

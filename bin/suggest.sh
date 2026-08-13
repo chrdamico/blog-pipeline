@@ -89,7 +89,7 @@ CLAUDE_MODEL="$CURATE_MODEL"
 # the only one there is (see generate_all).
 PERSONA=""
 
-mkdir -p "$POSTS" "$POSTS/Keep" "$TRASH" "$REJECTED" "$ARCHIVE" "$PROVENANCE" "$WORK" "$LOGS"
+mkdir -p "$POSTS" "$POOL" "$POSTS/Keep" "$TRASH" "$REJECTED" "$ARCHIVE" "$PROVENANCE" "$WORK" "$LOGS"
 
 # --- logging ----------------------------------------------------------------
 log() {
@@ -606,12 +606,47 @@ apply_aliases_outside_sources() {
     }' "$map" "$file"
 }
 
+# --- pools -------------------------------------------------------------------
+# Every pool folder that exists: the base's (the Posts/ root, where it has
+# always been) plus one per live arm (Posts/<arm>/). Keep/, Discarded/ and
+# Rejected/ are shared and are NOT pools — a post there has already been judged,
+# and its arm rides in its frontmatter.
+#
+# A run only ever writes into $POOL, its own. These two exist for the things
+# that must see every post regardless of arm: the alias sweep (a real name is a
+# leak wherever it sits), the source-path rewrites after a note is renamed, and
+# the filename-collision check.
+all_pools() {
+  printf '%s\n' "$POSTS"
+  local d
+  shopt -s nullglob
+  for d in "$POSTS"/*/; do
+    case "$(basename "${d%/}")" in Keep|Discarded|Rejected) continue ;; esac
+    printf '%s\n' "${d%/}"
+  done
+  shopt -u nullglob
+}
+
+# All post files. With no argument: the pools only. With "judged": the shared
+# Keep/, Discarded/ and Rejected/ as well.
+all_post_files() {
+  local want="${1:-}" d f
+  shopt -s nullglob
+  while IFS= read -r d; do
+    for f in "$d"/*.md; do printf '%s\n' "$f"; done
+  done < <(all_pools)
+  if [ "$want" = judged ]; then
+    for f in "$POSTS"/Keep/*.md "$TRASH"/*.md "$REJECTED"/*.md; do printf '%s\n' "$f"; done
+  fi
+  shopt -u nullglob
+}
+
 alias_sweep() {
   [ -s "$ALIASES" ] || return 0
   local f map="$TMP/sweep.map" bare="$TMP/sweep.bare" fixed="$TMP/sweep.fixed"
   local ref="$TMP/sweep.ref" changed=0
   shopt -s nullglob
-  for f in "$POSTS"/*.md "$POSTS"/Keep/*.md "$POSTS"/Discarded/*.md "$POSTS"/Rejected/*.md; do
+  while IFS= read -r f; do
     strip_sources "$f" > "$bare"
     has_real_name "$bare" || continue
     make_alias_map "$map"
@@ -768,8 +803,7 @@ normalize_txt_notes() {
     mv "$f" "$dest"
     renamed=$((renamed + 1))
     log "TXT->MD $old_rel -> $new_rel"
-    for p in "$POSTS"/*.md "$POSTS"/Keep/*.md "$POSTS"/Discarded/*.md \
-             "$POSTS"/Rejected/*.md "$PROVENANCE"/*.md; do
+    for p in $(all_post_files judged) "$PROVENANCE"/*.md; do
       [ -f "$p" ] || continue
       grep -qF "$old_rel" "$p" || continue
       replace_in_file "$old_rel" "$new_rel" "$p"
@@ -809,7 +843,7 @@ archive_notes() {
     mv "$f" "$dest"
     moved=$((moved + 1))
     log "ARCHIVE $old_rel -> $new_rel"
-    for p in "$POSTS"/*.md "$POSTS"/Keep/*.md; do
+    for p in $(all_post_files) "$POSTS"/Keep/*.md; do
       [ -f "$p" ] || continue
       grep -qF "$old_rel" "$p" || continue
       replace_in_file "$old_rel" "$new_rel" "$p"
@@ -1126,7 +1160,7 @@ typo_apply() {
 #   <$1>.short   claimed by a live short post and enforced this run
 #   <$1>.hidden  enforced for both kinds -> becomes a corpus hole
 build_claimed() {
-  local prefix="$1" raw="$1.raw" pv base pool kind
+  local prefix="$1" raw="$1.raw" pv base pool kind post_arm
   : > "$raw"; : > "$prefix.long"; : > "$prefix.short"
   shopt -s nullglob
   for pv in "$PROVENANCE"/*.md; do
@@ -1135,6 +1169,14 @@ build_claimed() {
     # Rejected/ claims nothing (see the note above).
     [ -f "$POSTS/Keep/$base" ] || continue
     pool="$POSTS/Keep/$base"
+    # Claims are ARM-SCOPED. A sentence spent by an arm's kept post is spent for
+    # THAT arm only: if arm B's keepers could starve the base of material, the
+    # two pools would no longer be answering the same question, and whichever
+    # arm you happened to like first would quietly handicap the other. Each arm
+    # therefore behaves as though it were the only one running. Legacy posts
+    # carry no arm and read as the base's, which is what they are.
+    post_arm="$(fm_field "$pool" arm)"; [ -n "$post_arm" ] || post_arm=base
+    [ "$post_arm" = "${BLOG_ARM:-base}" ] || continue
     kind="$(pool_kind_of "$pool")"
     case "$kind" in long|short) ;; *) continue ;; esac
     awk -v min="$REUSE_MIN_WORDS" -v kind="$kind" '
@@ -1467,7 +1509,7 @@ backfill_provenance() {
 pool_inventory() {
   local f id kind
   shopt -s nullglob
-  for f in "$POSTS"/*.md; do
+  for f in "$POOL"/*.md; do
     kind="$(pool_kind_of "$f")"
     [ -n "$kind" ] || continue
     id="$(basename "$f" .md)"
@@ -1747,7 +1789,11 @@ write_candidates() {
 
     slug="$(printf '%s' "$title" | slugify)"
     [ -n "$slug" ] || slug="untitled"
-    dest="$(dedup_md "$POSTS/${today}-${kind}-${slug}")"
+    # The arm rides in the filename as well as the folder: .provenance/ is flat
+    # and shared, so two arms proposing the same slug on the same day would
+    # otherwise fight over one report — and once a post is moved into Keep/ the
+    # folder is gone, while the name still says where it came from.
+    dest="$(dedup_md "$POOL/${today}${BLOG_ARM:+-$BLOG_ARM}-${kind}-${slug}")"
 
     # variant/persona/run go in the FRONTMATTER, not in a side file, because
     # frontmatter is what survives the trip to the phone and the move into
@@ -1809,7 +1855,7 @@ curate_kind() {
   local kind="$1" cap="$2" tmp="$3"
   local files=() f
   shopt -s nullglob
-  for f in "$POSTS"/*.md; do
+  for f in "$POOL"/*.md; do
     if [ "$(pool_kind_of "$f")" = "$kind" ]; then files+=("$f"); fi
   done
   shopt -u nullglob
@@ -1892,6 +1938,30 @@ cleanup() {
 }
 
 main() {
+  # The one refusal in this script. GATE_MODE=report switches off the rule the
+  # whole pipeline stands on — that a post is stitched from sentences the author
+  # actually wrote — so it exists for measurement, inside a sandbox, and nowhere
+  # else. Running it against the live tree would put model prose on the phone
+  # wearing his voice, and the posts would be indistinguishable from the real
+  # ones afterwards. Comments and profile headers said so; this makes it true.
+  # A sandbox re-roots the tree (bin/ab.sh always does), so that is the test.
+  if [ "$GATE_MODE" != enforce ] && [ "$BLOG_ROOT" = "$BLOG_REPO_DIR" ]; then
+    log "REFUSING to run with GATE_MODE=$GATE_MODE against the live tree"
+    printf 'suggest: GATE_MODE=%s is for experiments only, and this run is rooted at\n' "$GATE_MODE" >&2
+    printf '         the live tree (%s). A gate that does not reject would let the\n' "$BLOG_ROOT" >&2
+    printf '         model write prose straight into your pool. Use bin/ab.sh run, or\n' >&2
+    printf '         set BLOG_ROOT to a sandbox.\n' >&2
+    return 2
+  fi
+
+  # An ARM run is a child of the base run (see the tail of this function): the
+  # parent already holds the lock, already normalised and archived the notes,
+  # already proofread them and swept the aliases. Those are facts about the
+  # CORPUS and must happen once a day, not once per arm. What an arm repeats is
+  # everything downstream of the corpus — generation, the gate, its own pool's
+  # curation — because that is the part under test.
+  if [ "${ARM_RUN:-0}" != 1 ]; then
+
   acquire_lock
 
   # Retry-slot guard: the timer fires several slots a day so a 03:00 failure
@@ -1911,7 +1981,6 @@ main() {
 
   TMP="$(mktemp -d "$WORK/sugg.XXXXXX")"
   trap cleanup EXIT
-  local tmp="$TMP"
 
   normalize_txt_notes
   archive_notes
@@ -1925,6 +1994,13 @@ main() {
   # Before the corpus is read, so a typo is fixed once at the source rather than
   # in every post stitched out of it.
   typofix_notes
+
+  else
+    TMP="$(mktemp -d "$WORK/sugg.XXXXXX")"
+    trap cleanup EXIT
+    log "arm run: ${BLOG_ARM} -> ${POOL#"$BLOG_ROOT"/}"
+  fi
+  local tmp="$TMP"
 
   if [ "${1:-}" = "--typos-only" ]; then
     log "typos-only run done"
@@ -2020,6 +2096,32 @@ main() {
   # the pool and nobody learns anything.
   if [ "$rejected" -gt 0 ]; then
     notify "$rejected candidate(s) rejected by the stitching gate" "kept in Posts/Rejected/ for $REJECT_DAYS days"
+  fi
+
+  # --- the arms ----------------------------------------------------------
+  # The base has finished. Every ACTIVE arm now repeats the part under test —
+  # generation, the gate, its own pool's curation — against the same corpus and
+  # into its own folder. Each runs as a child with BLOG_ARM set, which is what
+  # re-resolves its model, prompt and knobs; an arm can change nothing about
+  # another arm, and nothing about the base.
+  #
+  # The child is started with every key the base exported CLEARED, because the
+  # environment outranks an arm's own file: without this, a promoted base.env
+  # would pin all arms to the base's values and every experiment would compare
+  # a configuration with itself.
+  #
+  # A failing arm is logged and skipped. It is an experiment; the base's
+  # suggestions must not depend on one.
+  if [ "${ARM_RUN:-0}" != 1 ]; then
+    local arm unset_args=() k
+    for k in $BLOG_APPLIED_KEYS; do unset_args+=(-u "$k"); done
+    while IFS= read -r arm; do
+      [ -n "$arm" ] || continue
+      log "--- arm $arm ---"
+      env "${unset_args[@]}" ARM_RUN=1 BLOG_ARM="$arm" SUGGEST_SCHEDULED=0 \
+          "$SCRIPT_DIR/suggest.sh" >/dev/null \
+        || log "WARN arm $arm failed; the base run stands"
+    done < <(blog_active_arms)
   fi
 
   # The day stamp is written only when generation actually went through; a
