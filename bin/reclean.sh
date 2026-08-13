@@ -21,6 +21,25 @@
 # What it regenerates: cleaned.md, changes.diff, and the transcript companion
 # in sync/ when the recording is still in its grace period there.
 #
+# WHAT IT SILENTLY BREAKS, and the reason to think twice: sentence claims are
+# keyed on the exact normalized SENTENCE TEXT. build_claimed lifts the keys out
+# of .provenance/*.md, and filter_claimed / reuse_gate match them against the
+# corpus — which reads drafts/*/cleaned.md DIRECTLY (corpus_files), grace period
+# or not. A reclean moves the corpus side of that comparison and leaves the
+# reports untouched, so every claimed sentence whose wording the new prompt
+# changes loses its key: no corpus hole, no reuse FAIL, and a sentence already
+# published becomes free material to publish a second time. REUSE_MIN_WORDS adds
+# a smaller permanent leak — a cut that costs two words drops a 7-word sentence
+# below the threshold and it stops being claimable at all.
+#
+# So a prompt change that rewrites sentence text is safe applied FORWARD (each
+# recording is cleaned once, and its corpus text and any claim key written from
+# it are the same generation of text) and unsafe applied BACKWARD through here.
+# Making it safe would need build_claimed to also emit a hedge-stripped key per
+# sentence — additive, so it can only ever claim more. Do not instead relax
+# norm(): that would let the curator drop words at stitch time and still be
+# graded VERBATIM, which moves the editing out of the audited stage.
+#
 # Takes process.sh's lock (waiting up to 10 minutes for it), so it can never
 # race the 15-minute timer; while it runs, timer runs skip harmlessly.
 #

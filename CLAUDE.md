@@ -15,6 +15,17 @@ bash tests/check_typo_gate.sh
 
 None of them call a model, so they are free and fast — run all five.
 
+Where things stand (2026-08-13). The base is `profiles/base.env`: arm **D**'s
+quotas (`MAX_NEW=60` proposed into `MAX_LONG=4` + `MAX_SHORT=8`, `VERBATIM_MIN=55`,
+`NEW_SLACK_EVERY=6`, `GLUE_MAX_WORDS=20`, `GATE_TRACE=1`) plus
+`CURATE_DIRECTIVE=…/tournament.md`. Active arms: **massive**, **middle**,
+**mosaic** — all three curator-stage rewrite licences, differing in
+`VERBATIM_MIN`. Promoted and stopped: **D**, **nofiller**. The base also pins
+`CLEANUP_DIRECTIVE=…/cleanup-nofiller.md`, from the `nofiller` arm: cleanup cuts
+the author's sentence-opening hedges ("I think" opened about one sentence in five
+of his transcripts). It stays in the directive slot rather than in
+`prompts/cleanup.md` for a measured reason spelled out below.
+
 ## When Christian says "do this change as an A/B test"
 
 He means a LIVE ARM, not the offline runner. The recipe, in full:
@@ -42,6 +53,48 @@ Rules for doing this well:
   `Discarded/`, recoverable; the registry keeps the row).
 - Statistics land in `STATS.md` at the repo root every run, and in
   `bin/arm.sh status`. The registry is `logs/arms.tsv`.
+
+### What an arm can and cannot test — check this BEFORE proposing one
+
+An arm repeats only what is **downstream of the corpus**: generation, the gate,
+its own pool's curation. Transcription and cleanup happen in `process.sh`, once
+per recording, and `process.sh` has **no `BLOG_ARM` handling at all** — the
+bundles in `drafts/` are shared by the base and every arm alike.
+
+So an arm whose delta is `CLEANUP_DIRECTIVE`, `PROMPTS_DIR` over `cleanup.md`,
+`CLEANUP_MODEL` or any `WHISPER_*` knob is **inert**: it will run every night and
+write a pool byte-identical to the base's. Do not offer one as a daily A/B, and
+say so plainly if the change he asks for lands at that stage.
+
+Test an upstream change one of these ways instead:
+
+```sh
+bin/arm.sh try <name> --full   # from samples/real/audio; whisper answers from
+                               # eval/cache/transcripts, so only cleanup costs calls
+bin/ab.sh run <exp>            # STAGE=process offline, REPS for variance, churn_pct per bundle
+```
+
+Plain `bin/arm.sh try <name>` (no `--full`) starts from **already-cleaned notes**
+and will show no difference whatsoever for a cleanup change — it is not evidence.
+
+Landing an upstream change is `bin/arm.sh promote`, same as any other — it pins
+the directive in `profiles/base.env`, which is the floor under every run.
+
+**Do not "tidy" a won directive into the prompt file.** It is the obvious move
+and it is measurably wrong. Tried on 2026-08-13 with the hedge mandate: the same
+words left 5 sentence-initial hedges from the directive slot, 12 as a bullet in
+`cleanup.md`'s DO list, and 8 as a dedicated late section — 30 uncut is the
+baseline. The slot wins because of POSITION: the stream is instructions + anchor
++ DIRECTIVE + input, so a directive sits immediately before the transcript,
+where a mid-prompt rule competes with forty others. Churn stayed flat only in the
+slot version. If you think a prompt edit is equivalent to a directive, measure it
+before believing it.
+
+The price is that a won directive occupies its slot: the next cleanup experiment
+to set `CLEANUP_DIRECTIVE` replaces the file and silently reverts the win, so
+such an experiment must carry the existing mandate forward in its own directive.
+Applied forward all of this is safe; see the reclean warning below for why
+applying it backward is not.
 
 Design invariants not to break: claims are **arm-scoped** (`build_claimed`
 filters on the post's `arm:` frontmatter) so no arm starves another; `Keep/`,
@@ -115,6 +168,20 @@ bin/ab.sh score               # ONLINE metric: what the live pool did per varian
 - Changing any prompt file changes the fingerprint, so live artifacts start
   carrying a new variant id automatically. That is intended — `score.sh`
   groups by it.
+- **Never `bin/reclean.sh` after a prompt change that rewrites sentence text.**
+  Claims are keyed on the exact normalized SENTENCE TEXT: `build_claimed` lifts
+  the keys from `.provenance/*.md`, and `filter_claimed` / `reuse_gate` match
+  them against the corpus — which reads `drafts/*/cleaned.md` **directly**
+  (`corpus_files`). A reclean moves the corpus side and leaves the reports alone,
+  so every claimed sentence whose wording changed loses its key: no corpus hole,
+  no reuse FAIL, and a sentence already published becomes free to publish twice.
+  `REUSE_MIN_WORDS=6` adds a smaller permanent leak — a two-word cut drops a
+  7-word sentence below the threshold and it stops being claimable at all.
+  Forward-only is safe (a recording is cleaned once, so its corpus text and any
+  key written from it are the same generation). The full reasoning, and the
+  additive `build_claimed` fix that would make recleaning safe, is in
+  `bin/reclean.sh`'s header. Do not instead relax `norm()` — that would let the
+  curator drop words at stitch time and still be graded VERBATIM.
 
 ## Conventions
 
