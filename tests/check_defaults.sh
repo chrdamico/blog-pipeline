@@ -28,14 +28,23 @@ eq() {
 # Resolve one variable under a given environment: $1 = variable, rest = env
 # assignments. The -u list clears whatever the caller's own shell happens to
 # carry, so the test says what it means; an assignment in "$@" puts it back.
+# BLOG_BASE_ENV is pointed at a file that does not exist, deliberately. This
+# file's job is to prove that the config LAYER changes nothing — that a run with
+# no profile resolves to the values the scripts hard-coded before it existed.
+# profiles/base.env is the opposite kind of thing: a deliberate, recorded change
+# to what the base IS, written by `bin/arm.sh promote`. Letting it in here would
+# mean the guard on the defaults quietly re-baselines itself every time a winner
+# is promoted, which is exactly when you would want it to still be watching.
 resolve() {
   local var="$1"; shift
-  env -u BLOG_PROFILE -u BLOG_ROOT -u PROMPTS_DIR -u BLOG_VARIANT "$@" \
+  env -u BLOG_PROFILE -u BLOG_ROOT -u PROMPTS_DIR -u BLOG_VARIANT -u BLOG_ARM \
+      BLOG_BASE_ENV="$SB/no-such-base.env" "$@" \
     bash -c '. lib/config.sh; printf "%s" "${'"$var"'}"'
 }
 
 # The fingerprint under a given environment, same convention.
-fp_of() { env -u BLOG_PROFILE -u BLOG_ROOT -u PROMPTS_DIR -u BLOG_VARIANT "$@" bash "$CONFIG" fingerprint; }
+fp_of() { env -u BLOG_PROFILE -u BLOG_ROOT -u PROMPTS_DIR -u BLOG_VARIANT -u BLOG_ARM \
+              BLOG_BASE_ENV="$SB/no-such-base.env" "$@" bash "$CONFIG" fingerprint; }
 
 # --- 1. a profileless run resolves to today's exact values --------------------
 # Every line here was copied out of the scripts as they stood before the config
@@ -199,12 +208,43 @@ fi
 # And the variant string is <name>:<fingerprint>: the profile's name so a
 # report reads, the fingerprint so two profiles that resolve alike are visibly
 # one variant.
-eq "variant of a profileless run" "default:$base" \
-   "$(env -u BLOG_PROFILE -u BLOG_ROOT bash "$CONFIG" variant)"
-eq "variant names the profile" "p:$(env -u BLOG_ROOT BLOG_PROFILE="$SB/p.env" bash "$CONFIG" fingerprint)" \
-   "$(env -u BLOG_ROOT BLOG_PROFILE="$SB/p.env" bash "$CONFIG" variant)"
-eq "BLOG_VARIANT wins outright" "loose-a:$base" \
-   "$(env -u BLOG_PROFILE -u BLOG_ROOT BLOG_VARIANT=loose-a bash "$CONFIG" variant)"
+# Same bypass as fp_of: these compare against $base, which was computed without
+# profiles/base.env, so they have to be computed without it too.
+variant_of() { env -u BLOG_PROFILE -u BLOG_ROOT -u BLOG_ARM \
+                   BLOG_BASE_ENV="$SB/no-such-base.env" "$@" bash "$CONFIG" variant; }
+eq "variant of a profileless run" "default:$base" "$(variant_of)"
+eq "variant names the profile" \
+   "p:$(env -u BLOG_ROOT -u BLOG_ARM BLOG_BASE_ENV="$SB/no-such-base.env" \
+          BLOG_PROFILE="$SB/p.env" bash "$CONFIG" fingerprint)" \
+   "$(env -u BLOG_ROOT -u BLOG_ARM BLOG_BASE_ENV="$SB/no-such-base.env" \
+        BLOG_PROFILE="$SB/p.env" bash "$CONFIG" variant)"
+eq "BLOG_VARIANT wins outright" "loose-a:$base" "$(variant_of BLOG_VARIANT=loose-a)"
+# An arm names itself, so a daily report reads by arm rather than by hash.
+mkdir -p "$SB/arms2"; printf 'MAX_NEW=4\n' > "$SB/arms2/tryme.env"
+case "$(env -u BLOG_PROFILE -u BLOG_ROOT BLOG_BASE_ENV="$SB/no-such-base.env" \
+          ARMS_DIR="$SB/arms2" BLOG_ARM=tryme bash "$CONFIG" variant)" in
+  tryme:*) ok "an arm names the variant after itself" ;;
+  *)       bad "an arm names the variant after itself" ;;
+esac
+
+# --- 9. the promotion floor -------------------------------------------------------
+# profiles/base.env is what `bin/arm.sh promote` writes: it changes the base
+# without taking anyone's override away, so it must lose to an arm, to a profile
+# and to the environment, and win only against the shipped default.
+printf 'MAX_NEW=99\nMAX_SHORT=77\n' > "$SB/base.env"
+eq "base.env beats the shipped default" 99 \
+   "$(env -u BLOG_PROFILE -u BLOG_ROOT -u BLOG_ARM BLOG_BASE_ENV="$SB/base.env" \
+        bash -c '. lib/config.sh; printf "%s" "$MAX_NEW"')"
+eq "the environment beats base.env" 5 \
+   "$(env -u BLOG_PROFILE -u BLOG_ROOT -u BLOG_ARM BLOG_BASE_ENV="$SB/base.env" MAX_NEW=5 \
+        bash -c '. lib/config.sh; printf "%s" "$MAX_NEW"')"
+mkdir -p "$SB/arms"; printf 'MAX_NEW=7\n' > "$SB/arms/tst.env"
+eq "an arm beats base.env" 7 \
+   "$(env -u BLOG_PROFILE -u BLOG_ROOT BLOG_BASE_ENV="$SB/base.env" ARMS_DIR="$SB/arms" BLOG_ARM=tst \
+        bash -c '. lib/config.sh; printf "%s" "$MAX_NEW"')"
+eq "base.env still fills what the arm leaves out" 77 \
+   "$(env -u BLOG_PROFILE -u BLOG_ROOT BLOG_BASE_ENV="$SB/base.env" ARMS_DIR="$SB/arms" BLOG_ARM=tst \
+        bash -c '. lib/config.sh; printf "%s" "$MAX_SHORT"')"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -62,6 +62,17 @@ reg_set() {   # name status [note]
   rm -f "$tmp"
 }
 
+# The -u arguments that give a child a clean slate. This script sources
+# lib/config.sh, which EXPORTS whatever profiles/base.env holds; those exports
+# would then outrank an arm's own file in any child process — so a promoted base
+# would silently pin every arm to its values, and the "differs from the base in"
+# report below would understate the arm it just wrote. Same reason suggest.sh
+# clears them before a fan-out.
+clean_env_args() {
+  local k
+  for k in $BLOG_APPLIED_KEYS; do printf '%s\n' "-u" "$k"; done
+}
+
 arm_file() { printf '%s/%s.env' "$ARMS_DIR" "$1"; }
 arm_pool() { printf '%s/%s' "$POSTS" "$1"; }
 
@@ -80,7 +91,7 @@ cmd_new() {
   valid_name "$name" || die "bad arm name '$name' — [A-Za-z0-9_-], and not base/Keep/Discarded/Rejected"
   [ -f "$(arm_file "$name")" ] && die "arm '$name' already exists — edit $(arm_file "$name") or retire it"
 
-  local note="" from="" run=0 kvs=()
+  local note="" from="" run=0 kvs=() a
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --note) note="$2"; shift 2 ;;
@@ -114,10 +125,14 @@ cmd_new() {
   reg_set "$name" active "$note"
   say "created $(arm_file "$name")"
   say "pool:   ${POSTS#"$BLOG_ROOT"/}/$name/"
-  say "config: $(BLOG_ARM="$name" bash "$BLOG_LIB_DIR/config.sh" variant)"
+  local cleanup_args=()
+  while IFS= read -r a; do cleanup_args+=("$a"); done < <(clean_env_args)
+  say "config: $(env ${cleanup_args[@]+"${cleanup_args[@]}"} BLOG_ARM="$name" \
+                   bash "$BLOG_LIB_DIR/config.sh" variant)"
   local before after
-  before="$(bash "$BLOG_LIB_DIR/config.sh" dump)"
-  after="$(BLOG_ARM="$name" bash "$BLOG_LIB_DIR/config.sh" dump)"
+  before="$(env ${cleanup_args[@]+"${cleanup_args[@]}"} bash "$BLOG_LIB_DIR/config.sh" dump)"
+  after="$(env ${cleanup_args[@]+"${cleanup_args[@]}"} BLOG_ARM="$name" \
+             bash "$BLOG_LIB_DIR/config.sh" dump)"
   say "differs from the base in:"
   diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed -n 's/^> /  /p' >&2 || true
   [ "$run" = 1 ] && cmd_run "$name"
@@ -139,7 +154,7 @@ cmd_run() {
     [ -f "$(arm_file "$a")" ] || die "no such arm: $a"
     say "--- $a ---"
     local unset_args=() k
-    for k in $BLOG_APPLIED_KEYS; do unset_args+=(-u "$k"); done
+    while IFS= read -r k; do unset_args+=("$k"); done < <(clean_env_args)
     env ${unset_args[@]+"${unset_args[@]}"} \
         ARM_RUN=1 BLOG_ARM="$a" SUGGEST_SCHEDULED=0 "$SCRIPT_DIR/suggest.sh" \
       || say "WARN arm $a failed"

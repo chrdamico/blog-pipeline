@@ -655,7 +655,11 @@ alias_sweep() {
     touch -r "$ref" "$f"
     changed=$((changed + 1))
     log "SWEEP anonymized $(basename "$f")"
-  done
+  # The redirect belongs to the LOOP, not to the function. Without it this
+  # `read` takes the script's own stdin: from a terminal the sweep hangs, and
+  # with stdin closed it reads EOF and inspects NOTHING — a privacy backstop
+  # silently doing no work, which is the worst way for one to fail.
+  done < <(all_post_files judged)
   shopt -u nullglob
   if [ "$changed" -gt 0 ]; then
     notify "$changed synced post(s) re-anonymized" "real names swept from Posts/"
@@ -1452,8 +1456,18 @@ backfill_provenance() {
   local f base id kind rep body corpus="$TMP/corpus.full"
   local n_claim n_sent rebuilt=0
   local missing=()
+  # Keep/ AND every pool. A kept post needs its report to claim its sentences;
+  # a pool post needs it because the report IS the record of what the model did,
+  # and for an arm that record is the entire point of running it.
+  local pools=() d ff
+  while IFS= read -r d; do pools+=("$d"); done < <(all_pools)
+  pools+=("$POSTS/Keep")
   shopt -s nullglob
-  for f in "$POSTS"/Keep/*.md; do
+  local files=()
+  for d in "${pools[@]}"; do
+    for ff in "$d"/*.md; do files+=("$ff"); done
+  done
+  for f in ${files[@]+"${files[@]}"}; do
     base="$(basename "$f")"
     [ -f "$PROVENANCE/$base" ] && continue
     kind="$(pool_kind_of "$f")"
@@ -1476,7 +1490,7 @@ backfill_provenance() {
     n_claim="$(grep -cE '^- (VERBATIM|TWEAKED) ' "$rep" || true)"
     n_sent="$(grep -cE '^- ' "$rep" || true)"
     if [ "${n_claim:-0}" -eq 0 ]; then
-      log "WARN Keep/$base has no provenance and none could be rebuilt — it claims nothing"
+      log "WARN ${f#"$POSTS"/} has no provenance and none could be rebuilt — it claims nothing"
       continue
     fi
     {
@@ -1498,9 +1512,9 @@ backfill_provenance() {
     } > "$PROVENANCE/$base"
     prov_record backfill "$f" "" "reconstructed:$n_claim/${n_sent:-0}"
     rebuilt=$((rebuilt + 1))
-    log "PROVENANCE rebuilt for Keep/$base — $n_claim of ${n_sent:-0} sentence(s) recovered"
+    log "PROVENANCE rebuilt for ${f#"$POSTS"/} — $n_claim of ${n_sent:-0} sentence(s) recovered"
   done
-  [ "$rebuilt" -eq 0 ] || log "provenance: $rebuilt Keep/ post(s) backfilled"
+  [ "$rebuilt" -eq 0 ] || log "provenance: $rebuilt post(s) backfilled"
 }
 
 # --- pool inventory ---------------------------------------------------------
@@ -1907,7 +1921,11 @@ curate_kind() {
     ok=0
   else
     while IFS= read -r id; do
-      [ -f "$POSTS/$id.md" ] || { ok=0; break; }
+      # $POOL, not $POSTS: an arm's candidates live in its own folder, and
+      # checking the base pool made every id look invented — so the curator's
+      # decision was discarded and the fallback kept the newest by date. The
+      # arm whose whole point is the curator choosing then never got to choose.
+      [ -f "$POOL/$id.md" ] || { ok=0; break; }
     done <<< "$keep_ids"
     [ "$(printf '%s\n' "$keep_ids" | sort -u | wc -l)" -eq "$cap" ] || ok=0
   fi
@@ -1933,6 +1951,15 @@ curate_kind() {
 # `local` here would be unbound by the time it fires (set -u).
 TMP=""
 cleanup() {
+  # SUGGEST_KEEP_TMP=1 keeps the scratch dir: the generation stream that was
+  # sent, the raw reply, every candidate and its gate report. When a call comes
+  # back short and non-zero there is no other way to see WHAT it said, and the
+  # answer is usually in the reply rather than in the log.
+  if [ "${SUGGEST_KEEP_TMP:-0}" = 1 ] && [ -n "$TMP" ]; then
+    log "work dir kept: $TMP"
+    [ -z "$LOCK_CREATED_DIR" ] || rmdir "$LOCK_CREATED_DIR" 2>/dev/null || true
+    return 0
+  fi
   [ -z "$TMP" ] || rm -rf "$TMP"
   [ -z "$LOCK_CREATED_DIR" ] || rmdir "$LOCK_CREATED_DIR" 2>/dev/null || true
 }
@@ -2004,6 +2031,23 @@ main() {
 
   if [ "${1:-}" = "--typos-only" ]; then
     log "typos-only run done"
+    return 0
+  fi
+
+  if [ "${1:-}" = "--backfill-only" ]; then
+    backfill_provenance
+    log "backfill-only run done"
+    return 0
+  fi
+
+  # Curation alone, over the pool as it stands. Generation is the expensive
+  # half; when a curation decision is lost — to a bad response, or to a bug in
+  # the validation that discards a good one — this replays just that call
+  # instead of paying to invent the candidates a second time.
+  if [ "${1:-}" = "--curate-only" ]; then
+    curate_kind long  "$MAX_LONG"  "$tmp"
+    curate_kind short "$MAX_SHORT" "$tmp"
+    log "curate-only run done"
     return 0
   fi
 
@@ -2079,11 +2123,19 @@ main() {
   # Drop provenance only once its post is gone from the pool, Keep/ AND
   # Discarded/ — an eviction is reversible for TRASH_DAYS, and a restored post
   # should still have its report.
-  local pv base
+  # EVERY pool, not just the base's. An arm's post lives in Posts/<arm>/, and a
+  # reaper that only looked at Posts/ deleted its report at the end of the arm's
+  # own run — destroying the per-sentence classification the arm exists to
+  # produce, and with it the claims that post would have made once kept.
+  local pv base d alive
   shopt -s nullglob
   for pv in "$PROVENANCE"/*.md; do
     base="$(basename "$pv")"
-    [ -f "$POSTS/$base" ] || [ -f "$POSTS/Keep/$base" ] || [ -f "$TRASH/$base" ] \
+    alive=0
+    while IFS= read -r d; do
+      [ -f "$d/$base" ] && { alive=1; break; }
+    done < <(all_pools)
+    [ "$alive" = 1 ] || [ -f "$POSTS/Keep/$base" ] || [ -f "$TRASH/$base" ] \
       || rm -f "$pv"
   done
   shopt -u nullglob
