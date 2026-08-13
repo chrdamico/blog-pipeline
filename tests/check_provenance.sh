@@ -29,7 +29,7 @@ eq()  { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "want: $2" "got:  $3"; f
 
 # Run a snippet with both libraries loaded, in a sandbox root so nothing here
 # can append to the live ledgers.
-prov() { BLOG_ROOT="$SB" bash -c '. lib/config.sh; . lib/provenance.sh; '"$1"; }
+prov() { env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-base.env" BLOG_ROOT="$SB" bash -c '. lib/config.sh; . lib/provenance.sh; '"$1"; }
 
 # meta.json through a real JSON parser. Without python3 the file is only checked
 # for balance, which is weaker but still catches the failure this test was
@@ -117,7 +117,7 @@ if command -v python3 >/dev/null 2>&1; then
   # And when the configuration really did change, the one it replaced is named —
   # cleaned.orig.md still holds the text that variant produced, so the record of
   # it should not vanish.
-  BLOG_ROOT="$SB" BLOG_VARIANT=loosened MAX_NEW=3 bash -c \
+  env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-base.env" BLOG_ROOT="$SB" BLOG_VARIANT=loosened MAX_NEW=3 bash -c \
     '. lib/config.sh; . lib/provenance.sh
      prov_write_meta '"$SB"'/b1 reclean "" "" '"$SB"'/b1/verbatim.md '"$SB"'/b1/cleaned.md 10 5 1' >/dev/null
   case "$(json_get "$SB/b1/meta.json" replaced_variant)" in

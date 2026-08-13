@@ -51,7 +51,7 @@ post "$R/sync/Obsidian/Posts/Keep/2026-01-15-short-kept.md" base \
      'A kept post also mentions Testperson Alpha once.'
 printf 'a note\n' > "$R/sync/Obsidian/note.md"
 
-out="$(BLOG_ROOT="$R" NOTIFY=/bin/true NAME_SCAN=0 TYPO_FIX=0 \
+out="$(env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-base.env" BLOG_ROOT="$R" NOTIFY=/bin/true NAME_SCAN=0 TYPO_FIX=0 \
        bash bin/suggest.sh --sweep-only </dev/null 2>&1)"
 rc=$?
 [ "$rc" -eq 0 ] || bad "the sweep run exits cleanly" "exit $rc" "$out"

@@ -54,9 +54,15 @@ EOF
 # verdict as the exit status — so a caller reads it as `rep="$(gate …)"; RC=$?`
 # (the assignment has to happen outside, or the subshell swallows it).
 RC=0
+# BLOG_BASE_ENV points at nothing on purpose: profiles/base.env is a recorded
+# change to what the base IS (written by `arm.sh promote`), and these assertions
+# are about what the CODE does with its shipped defaults. Letting a promotion in
+# would rewrite the expected thresholds under the test — which is the moment you
+# most want the gate's arithmetic still being watched.
 gate() {
   local body="$1"; shift
-  env "$@" bash -c 'source "$0" >/dev/null 2>&1; verbatim_gate "$1" "$2"' \
+  env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-such-base.env" "$@" \
+      bash -c 'source "$0" >/dev/null 2>&1; verbatim_gate "$1" "$2"' \
       "$LIB" "$body" "$SB/corpus.md"
 }
 
@@ -144,7 +150,7 @@ esac
 # No model in the loop either way: the live-tree run stops at the guard, and the
 # sandbox run has an empty corpus (and CLAUDE_BIN=/bin/false, which turns any
 # call that did happen into a failure rather than a charge).
-out="$(GATE_MODE=report bash bin/suggest.sh 2>&1)"; rc=$?
+out="$(env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-base.env" GATE_MODE=report bash bin/suggest.sh 2>&1)"; rc=$?
 if [ "$rc" -eq 2 ] && printf '%s' "$out" | grep -q 'REFUSING'; then
   ok "GATE_MODE=report is refused against the live tree"
 else
@@ -159,7 +165,7 @@ fi
 
 mkdir -p "$SB/root/sync/Obsidian" "$SB/root/drafts" "$SB/root/logs" \
          "$SB/root/work" "$SB/root/private"
-out="$(BLOG_ROOT="$SB/root" GATE_MODE=report CLAUDE_BIN=/bin/false NOTIFY=/bin/true \
+out="$(env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-base.env" BLOG_ROOT="$SB/root" GATE_MODE=report CLAUDE_BIN=/bin/false NOTIFY=/bin/true \
        bash bin/suggest.sh 2>&1)"; rc=$?
 if printf '%s' "$out" | grep -q 'REFUSING'; then
   bad "a sandboxed run may still use report mode" "$out"
