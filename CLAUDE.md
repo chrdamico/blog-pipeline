@@ -18,9 +18,9 @@ None of them call a model, so they are free and fast — run all five.
 Where things stand (2026-08-13). The base is `profiles/base.env`: arm **D**'s
 quotas (`MAX_NEW=60` proposed into `MAX_LONG=4` + `MAX_SHORT=8`, `VERBATIM_MIN=55`,
 `NEW_SLACK_EVERY=6`, `GLUE_MAX_WORDS=20`, `GATE_TRACE=1`) plus
-`CURATE_DIRECTIVE=…/tournament.md`. Active arms: **massive**, **middle**,
-**mosaic** — all three curator-stage rewrite licences, differing in
-`VERBATIM_MIN`. Promoted and stopped: **D**, **nofiller**. The base also pins
+`CURATE_DIRECTIVE=…/tournament.md`. Active arms: **massive**, **middle** —
+both curator-stage rewrite licences, differing in `VERBATIM_MIN`. Promoted:
+**D**, **nofiller**. Retired: **mosaic** (2026-08-14). The base also pins
 `CLEANUP_DIRECTIVE=…/cleanup-nofiller.md`, from the `nofiller` arm: cleanup cuts
 the author's sentence-opening hedges ("I think" opened about one sentence in five
 of his transcripts). It stays in the directive slot rather than in
