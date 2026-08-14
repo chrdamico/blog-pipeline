@@ -49,6 +49,10 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # suggestions inside it) is invisible to this script.
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/common.sh
+. "$REPO_DIR/lib/common.sh"
+# shellcheck source=../lib/claude.sh
+. "$REPO_DIR/lib/claude.sh"
 # shellcheck source=../lib/provenance.sh
 . "$REPO_DIR/lib/provenance.sh"
 
@@ -72,25 +76,6 @@ log() {
 notify() {
   # never let a notifier problem escape
   "$NOTIFY" "$1" "${2:-}" >/dev/null 2>&1 || log "WARN notify failed: $1"
-}
-
-# --- portable primitives ----------------------------------------------------
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'   # macOS
-  fi
-}
-
-file_mtime_epoch() {
-  # GNU stat first, then BSD/macOS stat
-  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"
-}
-
-epoch_to_date() {
-  # GNU date first, then BSD/macOS date
-  date -d "@$1" '+%Y-%m-%d' 2>/dev/null || date -r "$1" '+%Y-%m-%d'
 }
 
 # --- single-instance lock (flock on Linux, mkdir elsewhere) -----------------
@@ -119,95 +104,24 @@ already_processed() {
   [ -f "$PROCESSED" ] && cut -f1 "$PROCESSED" | grep -qxF "$1"
 }
 
-# Read text on stdin, emit a filesystem-safe slug from the first ~5 words.
-slugify() {
-  # Uppercase umlauts are transliterated *before* the ASCII lowercase, which
-  # only maps a-z — otherwise a leading "Ü" is dropped (mirrors bin/note.sh).
-  local s
-  s="$(sed -e 's/Ä/Ae/g' -e 's/Ö/Oe/g' -e 's/Ü/Ue/g' \
-       | tr '[:upper:]' '[:lower:]' \
-       | sed -e 's/ä/ae/g' -e 's/ö/oe/g' -e 's/ü/ue/g' -e 's/ß/ss/g' \
-       | tr -c 'a-z0-9' ' ' \
-       | tr -s ' ')"
-  # shellcheck disable=SC2086  # deliberate word-split; only [a-z0-9 ] remain
-  set -- $s
-  local out="" i=0 w
-  for w in "$@"; do
-    out="${out:+$out-}$w"
-    i=$((i + 1))
-    [ "$i" -ge 5 ] && break
-  done
-  printf '%s' "$out"
-}
-
-# Given a desired base path, return the first non-existing variant, adding
-# -2, -3, ... on collision so an existing bundle is never overwritten.
-dedup_dest() {
-  local base="$1" dest="$1" n=2
-  while [ -e "$dest" ]; do
-    dest="${base}-${n}"
-    n=$((n + 1))
-  done
-  printf '%s' "$dest"
-}
-
 # Run a pure text transform through the Claude subscription (never an API key).
 #   $1 prompt file   $2 input file (stdin)   $3 output file (stdout)
-# Runs from work/ with FS/exec tools denied, so the transform cannot touch the
-# repo — it only reads stdin and writes stdout. Used for both the voice-
-# preserving cleanup and the optional structure suggestion.
 #
-# It also leaves the call's cost in LAST_IN_CHARS / LAST_OUT_CHARS /
-# LAST_SECONDS for the bundle's meta.json — set here rather than parsed back
-# out of the usage ledger, where a lookup would have to guess which row was ours.
-LAST_IN_CHARS=0
-LAST_OUT_CHARS=0
-LAST_SECONDS=0
-
+# The stream assembly and the call itself are lib/claude.sh — shared with
+# bin/reclean.sh, which must send byte-for-byte the same thing, and with the
+# curator, which shares the invocation but not the assembly. The call runs from
+# work/ with NO tools, so the transform can only read its stdin and write its
+# stdout.
+#
+# It also leaves the call's cost in BLOG_LAST_IN_CHARS / BLOG_LAST_OUT_CHARS /
+# BLOG_LAST_SECONDS for the bundle's meta.json.
 claude_transform() {
-  local prompt_file="$1" in_file="$2" out_file="$3" rc=0
-  local started
-  started="$(date +%s)"
-  # Feed the instructions AND the input as ONE stdin stream, delimited by
-  # explicit markers, with no prompt argument. Passing the prompt as -p and the
-  # text on stdin is ambiguous: claude sometimes ignores the piped input and
-  # replies "no transcript arrived" instead of transforming it. A single marked
-  # stream is deterministic (verified against the transcripts that failed).
-  {
-    cat "$prompt_file"
-    # The style anchor is one file read by every step (see prompts/style-anchor.md),
-    # appended after the instructions and before the input markers.
-    if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
-    # The directive slot: instructions + anchor + DIRECTIVE + input. A small
-    # free-text file saying something this run wants that the shared prompt does
-    # not — "repair more inside sentences", say. Empty by default, and an empty
-    # directive changes the stream by not one byte.
-    if [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ]; then
-      printf '\n\n'; cat "$CLEANUP_DIRECTIVE"
-    fi
-    printf '\n\n===== BEGIN INPUT (process ONLY the text between the markers; output nothing else) =====\n'
-    cat "$in_file"
-    printf '\n===== END INPUT =====\n'
-  } | ( cd "$WORK" && "$CLAUDE_BIN" -p \
-        --model "$CLAUDE_MODEL" \
-        --output-format text \
-        --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" ) \
-      > "$out_file" || rc=$?
-  # Usage ledger (see bin/stats.sh): stream size in chars, reconstructed from
-  # the parts (prompt + anchor + input; the markers are noise). ~4 chars/token.
-  local in_chars out_chars
-  in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
-  [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
-  [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ] \
-    && in_chars=$((in_chars + $(wc -c < "$CLEANUP_DIRECTIVE")))
-  out_chars="$(wc -c < "$out_file" | tr -d ' ')"
-  printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "process:$(basename "$prompt_file" .md)" \
-    "$CLAUDE_MODEL" "$in_chars" "$out_chars" \
-    >> "$USAGE_TSV"
-  LAST_IN_CHARS="$in_chars"
-  LAST_OUT_CHARS="$out_chars"
-  LAST_SECONDS=$(( $(date +%s) - started ))
+  local prompt_file="$1" in_file="$2" out_file="$3" rc=0 stream
+  stream="$(mktemp "$WORK/.stream.XXXXXX")"
+  blog_cleanup_stream "$prompt_file" "$in_file" "$stream"
+  blog_claude "$stream" "$out_file" "$CLAUDE_MODEL" \
+      "process:$(basename "$prompt_file" .md)" "$BLOG_STREAM_CHARS" || rc=$?
+  rm -f "$stream"
   return $rc
 }
 
@@ -217,7 +131,7 @@ process_one() {
   local origname hash tmp date slug dest rel
   origname="$(basename "$audio")"
 
-  hash="$(sha256 "$audio")" || { log "ERROR could not hash: $origname"; return 1; }
+  hash="$(blog_sha256 "$audio")" || { log "ERROR could not hash: $origname"; return 1; }
 
   if already_processed "$hash"; then
     # Already bundled, and deliberately still sitting here: it lingers in sync/
@@ -258,7 +172,7 @@ process_one() {
   fi
   # Kept before the optional structure call below overwrites them: what meta.json
   # reports is the cost of the CLEANUP, which is the transform under study.
-  local clean_in="$LAST_IN_CHARS" clean_out="$LAST_OUT_CHARS" clean_secs="$LAST_SECONDS"
+  local clean_in="$BLOG_LAST_IN_CHARS" clean_out="$BLOG_LAST_OUT_CHARS" clean_secs="$BLOG_LAST_SECONDS"
 
   # Safety net: the ⟦unsure⟧ confidence marks (see transcribe.sh) live in
   # verbatim.md only; the prompt tells the cleaner to resolve them, and this
@@ -286,9 +200,9 @@ process_one() {
   # 4. name the bundle: date from the recording's mtime, slug from the cleaned
   #    text (filler already removed, so the leading words are "meaningful").
   date="$(epoch_to_date "$(file_mtime_epoch "$audio")")"
-  slug="$(head -c 2000 "$tmp/cleaned.md" | slugify)"
+  slug="$(head -c 2000 "$tmp/cleaned.md" | blog_slugify 5)"
   [ -n "$slug" ] || slug="memo"
-  dest="$(dedup_dest "$DRAFTS/${date}-${slug}")"
+  dest="$(dedup_dir "$DRAFTS/${date}-${slug}")"
 
   # 5. assemble the bundle. Text artifacts first, then the audio — COPIED, not
   #    moved: the original stays in sync/ so the phone keeps the recording for
@@ -361,7 +275,7 @@ reap_sync() {
 
   while IFS= read -r f; do
     [ -f "$f" ] || continue
-    hash="$(sha256 "$f")" || continue
+    hash="$(blog_sha256 "$f")" || continue
     already_processed "$hash" || continue      # not bundled yet — leave it
     companion="$SYNC/$(basename "${f%.*}").md"
     rm -f "$f" "$companion"
@@ -379,7 +293,8 @@ main() {
 
   # A crashed run (SIGKILL, power loss) never fires the EXIT trap; sweep any
   # scratch dir old enough that it can't belong to a live run.
-  find "$WORK" -maxdepth 1 -name 'proc.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+  find "$WORK" -maxdepth 1 \( -name 'proc.*' -o -name '.stream.*' \) -mmin +1440 \
+    -exec rm -rf {} + 2>/dev/null || true
 
   log "scan: $SYNC"
 

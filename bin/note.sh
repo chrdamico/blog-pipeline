@@ -26,6 +26,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/common.sh
+. "$REPO_DIR/lib/common.sh"
 # The vault inside the shared Syncthing folder. Notes are its top-level .md
 # files; Posts/ (generated suggestions) is a subdirectory, so the non-recursive
 # globs below list and search notes only.
@@ -47,44 +49,12 @@ pick_editor() {
   die "no editor found — set \$EDITOR"
 }
 
-# Read text on stdin, emit a filesystem-safe slug from the first ~6 words.
-# Umlauts are transliterated in both cases *before* the ASCII lowercase, which
-# only maps a-z — otherwise a leading "Ö" survives to the tr -c and is dropped.
-slugify() {
-  local s
-  s="$(sed -e 's/Ä/Ae/g' -e 's/Ö/Oe/g' -e 's/Ü/Ue/g' \
-       | tr '[:upper:]' '[:lower:]' \
-       | sed -e 's/ä/ae/g' -e 's/ö/oe/g' -e 's/ü/ue/g' -e 's/ß/ss/g' \
-       | tr -c 'a-z0-9' ' ' \
-       | tr -s ' ')"
-  # shellcheck disable=SC2086  # deliberate word-split; only [a-z0-9 ] remain
-  set -- $s
-  local out="" i=0 w
-  for w in "$@"; do
-    out="${out:+$out-}$w"
-    i=$((i + 1))
-    [ "$i" -ge 6 ] && break
-  done
-  printf '%s' "$out"
-}
-
-# Given a desired base path (no extension), return the first non-existing
-# variant, adding -2, -3, ... so an existing note is never overwritten.
-dedup_dest() {
-  local base="$1" dest="$1.md" n=2
-  while [ -e "$dest" ]; do
-    dest="${base}-${n}.md"
-    n=$((n + 1))
-  done
-  printf '%s' "$dest"
-}
-
 # Name a note from its own first line; fall back to the timestamp alone.
 name_for() {
   local first slug
   first="$(head -n 1 "$1" | sed 's/^#\+[[:space:]]*//')"
-  slug="$(printf '%s' "$first" | slugify)"
-  dedup_dest "$NOTES_DIR/$(date +%Y-%m-%d)${slug:+-$slug}"
+  slug="$(printf '%s' "$first" | blog_slugify)"
+  dedup_md "$NOTES_DIR/$(date +%Y-%m-%d)${slug:+-$slug}"
 }
 
 mkdir -p "$NOTES_DIR"

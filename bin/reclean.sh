@@ -54,6 +54,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/claude.sh
+. "$REPO_DIR/lib/claude.sh"
 # shellcheck source=../lib/provenance.sh
 . "$REPO_DIR/lib/provenance.sh"
 
@@ -91,44 +93,16 @@ acquire_lock() {
   fi
 }
 
-# Same contract as process.sh's claude_transform: subscription auth, run from
-# work/ with FS/exec tools denied — reads stdin, writes stdout, nothing else.
-LAST_IN_CHARS=0
-LAST_OUT_CHARS=0
-LAST_SECONDS=0
-
+# The same call process.sh makes, from the same assembly in lib/claude.sh —
+# which is the point: a reclean that sent a different stream would not be
+# re-running the cleanup, it would be running a different one.
 claude_transform() {
-  local prompt_file="$1" in_file="$2" out_file="$3" rc=0
-  local started
-  started="$(date +%s)"
-  {
-    cat "$prompt_file"
-    if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
-    # Same third slot as process.sh: instructions + anchor + directive + input.
-    if [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ]; then
-      printf '\n\n'; cat "$CLEANUP_DIRECTIVE"
-    fi
-    printf '\n\n===== BEGIN INPUT (process ONLY the text between the markers; output nothing else) =====\n'
-    cat "$in_file"
-    printf '\n===== END INPUT =====\n'
-  } | ( cd "$WORK" && "$CLAUDE_BIN" -p \
-        --model "$CLAUDE_MODEL" \
-        --output-format text \
-        --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" ) \
-      > "$out_file" || rc=$?
-  local in_chars out_chars
-  in_chars=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
-  [ -f "$ANCHOR" ] && in_chars=$((in_chars + $(wc -c < "$ANCHOR")))
-  [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ] \
-    && in_chars=$((in_chars + $(wc -c < "$CLEANUP_DIRECTIVE")))
-  out_chars="$(wc -c < "$out_file" | tr -d ' ')"
-  printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" "reclean:$(basename "$prompt_file" .md)" \
-    "$CLAUDE_MODEL" "$in_chars" "$out_chars" \
-    >> "$USAGE_TSV"
-  LAST_IN_CHARS="$in_chars"
-  LAST_OUT_CHARS="$out_chars"
-  LAST_SECONDS=$(( $(date +%s) - started ))
+  local prompt_file="$1" in_file="$2" out_file="$3" rc=0 stream
+  stream="$(mktemp "$WORK/.stream.XXXXXX")"
+  blog_cleanup_stream "$prompt_file" "$in_file" "$stream"
+  blog_claude "$stream" "$out_file" "$CLAUDE_MODEL" \
+      "reclean:$(basename "$prompt_file" .md)" "$BLOG_STREAM_CHARS" || rc=$?
+  rm -f "$stream"
   return $rc
 }
 
@@ -188,7 +162,7 @@ reclean_one() {
     prov_write_meta "$dir" reclean "$src_audio" \
       "$([ -n "$src_audio" ] && blog_sha256 "$src_audio" || printf -- -)" \
       "$dir/verbatim.md" "$dir/cleaned.md" \
-      "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS" \
+      "$BLOG_LAST_IN_CHARS" "$BLOG_LAST_OUT_CHARS" "$BLOG_LAST_SECONDS" \
       || log "WARN could not write meta.json for $name"
     prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12),unchanged"
     log "UNCHANGED $name"
@@ -231,7 +205,7 @@ reclean_one() {
   prov_write_meta "$dir" reclean "$src_audio" \
     "$([ -n "$src_audio" ] && blog_sha256 "$src_audio" || printf -- -)" \
     "$dir/verbatim.md" "$dir/cleaned.md" \
-    "$LAST_IN_CHARS" "$LAST_OUT_CHARS" "$LAST_SECONDS" \
+    "$BLOG_LAST_IN_CHARS" "$BLOG_LAST_OUT_CHARS" "$BLOG_LAST_SECONDS" \
     || log "WARN could not write meta.json for $name"
   prov_record reclean "$dir" "" "verbatim:$(blog_file_hash "$dir/verbatim.md" | cut -c1-12)"
 
@@ -243,7 +217,8 @@ reclean_one() {
 main() {
   acquire_lock
 
-  find "$WORK" -maxdepth 1 -name 'reclean.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+  find "$WORK" -maxdepth 1 \( -name 'reclean.*' -o -name '.stream.*' \) -mmin +1440 \
+    -exec rm -rf {} + 2>/dev/null || true
 
   local dirs=() d
   if [ "$#" -gt 0 ]; then

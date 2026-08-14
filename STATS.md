@@ -1,6 +1,6 @@
 # Pipeline statistics
 
-Generated 2026-08-14 10:51 CEST by `bin/stats.sh --write`, which runs at the end of every
+Generated 2026-08-14 10:54 CEST by `bin/stats.sh --write`, which runs at the end of every
 suggest run. Post titles are omitted here on purpose — see `bin/stats.sh`
 for the full local view, and `logs/stats/` for one snapshot per day.
 
@@ -32,6 +32,13 @@ mosaic                                   15        0     0%      0      0     15
 draft bundles : 17
 notes (root)  : 17
 notes (archive): 0
+
+== origin (dictated vs typed) ==
+Keep           8 posts     98 sentences  voice    5 ( 5%)  typed   93 (95%)  glue/new 7
+Discarded    165 posts   3165 sentences  voice 1408 (44%)  typed 1757 (56%)  glue/new 245  [2 without a report]
+pool          12 posts    157 sentences  voice   42 (26%)  typed  115 (74%)  glue/new 3
+voice is 43% of what was offered and 5% of what was kept — typing over-performs
+(Keep/ is still small — 98 sentences; treat the lift as provisional)
 
 == stitching gate ==
 candidates  : 216  (207 passed, 9 rejected — 95% pass rate)

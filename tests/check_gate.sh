@@ -141,6 +141,104 @@ case "$(printf '%s\n' "$rep" | tail -1)" in
   *)      bad "the verdict is still the last line" "$(printf '%s\n' "$rep" | tail -1)" ;;
 esac
 
+# --- 4b. the dictation licence (VOICE_TWEAK_GAP) --------------------------------
+# The one place the gate is allowed to treat the corpus's two mouths
+# differently. A false start cut out of the MIDDLE of a sentence leaves a hole
+# no end-trim can close, so without this the sentence grades NEW; with it, and
+# only when the sentence is found in a dictated bundle, it grades TWEAKED.
+#
+# The asymmetry is the whole point, so it is asserted from both sides: the same
+# edit, the same number of words, applied once to a spoken note and once to a
+# typed one. If the typed case ever starts passing, the licence has leaked into
+# material the author composed by hand and the arm is no longer testing what it
+# says it tests.
+#
+# The hole has to sit in the REAL middle for these to test anything. Put a false
+# start three words in and the existing end-trim path matches the sentence on
+# its own — the licence is never consulted, and the test passes while asserting
+# nothing. So both fixtures keep eight words in front of the hole and seven
+# behind it, where no trim of three words from either end can reach.
+cat > "$SB/mouths.md" <<'EOF'
+
+### NOTE id=drafts/2026-08-13-spoken/cleaned.md
+
+The whole delivery plan depends on one connector, well no I mean, arriving on time before the winter freeze.
+
+### NOTE id=sync/Obsidian/typed.md
+
+The whole budget forecast depends on one supplier, well no I mean, holding its price until the spring review.
+EOF
+
+# Each candidate is its note's sentence with the same four-word false start
+# ("well no I mean,") cut out of the middle.
+cat > "$SB/spoken-cut.md" <<'EOF'
+The whole delivery plan depends on one connector, arriving on time before the winter freeze.
+EOF
+cat > "$SB/typed-cut.md" <<'EOF'
+The whole budget forecast depends on one supplier, holding its price until the spring review.
+EOF
+
+mouth_gate() {
+  local body="$1"; shift
+  env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-such-base.env" "$@" \
+      bash -c 'source "$0" >/dev/null 2>&1; verbatim_gate "$1" "$2"' \
+      "$LIB" "$body" "$SB/mouths.md"
+}
+
+# Off by default: the excision is prose as far as the shipped gate is concerned.
+rep="$(mouth_gate "$SB/spoken-cut.md")"
+case "$rep" in
+  *"- NEW "*) ok "an excision is NEW while the licence is off" ;;
+  *)          bad "an excision is NEW while the licence is off" "$rep" ;;
+esac
+case "$rep" in
+  *"middle of a dictated"*) bad "the default summary line gains no suffix" "$rep" ;;
+  *)                        ok "the default summary line gains no suffix" ;;
+esac
+
+# On, and the spoken sentence is his again — attributed to the bundle it came
+# out of, counted in the summary, and countable afterwards.
+rep="$(mouth_gate "$SB/spoken-cut.md" VOICE_TWEAK_GAP=8)"
+case "$rep" in
+  *"- TWEAKED  [drafts/2026-08-13-spoken/cleaned.md]"*)
+    ok "a cut inside a dictated sentence grades TWEAKED" ;;
+  *) bad "a cut inside a dictated sentence grades TWEAKED" "$rep" ;;
+esac
+case "$rep" in
+  *"[1 cut from the middle of a dictated sentence]"*)
+    ok "the summary line counts what the licence bought" ;;
+  *) bad "the summary line counts what the licence bought" "$(printf '%s' "$rep" | tail -1)" ;;
+esac
+
+# The same edit over a typed note gets nothing, at any gap.
+rep="$(mouth_gate "$SB/typed-cut.md" VOICE_TWEAK_GAP=8)"
+case "$rep" in
+  *"- NEW "*) ok "the licence does not reach a typed note" ;;
+  *)          bad "the licence does not reach a typed note" "$rep" ;;
+esac
+rep="$(mouth_gate "$SB/typed-cut.md" VOICE_TWEAK_GAP=99)"
+case "$rep" in
+  *"- NEW "*) ok "the licence does not reach a typed note at any gap" ;;
+  *)          bad "the licence does not reach a typed note at any gap" "$rep" ;;
+esac
+
+# The cap is a cap: a hole wider than the budget is two thoughts welded
+# together, not a false start, and it must still fail.
+rep="$(mouth_gate "$SB/spoken-cut.md" VOICE_TWEAK_GAP=2)"
+case "$rep" in
+  *"- NEW "*) ok "a hole wider than the budget still fails" ;;
+  *)          bad "a hole wider than the budget still fails" "$rep" ;;
+esac
+
+# A licensed sentence is a SPENT sentence: build_claimed reads TWEAKED lines to
+# decide what a kept post has used up, and it must be able to read this one.
+rep="$(mouth_gate "$SB/spoken-cut.md" VOICE_TWEAK_GAP=8)"
+if printf '%s\n' "$rep" | grep -qE '^- TWEAKED[[:space:]]+\[[^]]*\][[:space:]]*The whole delivery'; then
+  ok "an excised sentence is claimable by build_claimed"
+else
+  bad "an excised sentence is claimable by build_claimed" "$rep"
+fi
+
 # --- 5. report mode cannot reach the live tree ----------------------------------
 # The knob that switches enforcement off is the one thing in this repo that can
 # put model prose into the pool wearing the author's voice. It is refused

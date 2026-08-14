@@ -7,10 +7,14 @@ Type=oneshot
 WorkingDirectory=__REPO_DIR__
 ExecStart=__REPO_DIR__/bin/suggest.sh
 Nice=10
-# Tells suggest.sh this is a timer slot, not a manual run: a slot skips itself
-# when today's stamp (logs/suggest.lastdone) already exists. Manual runs ignore
-# the stamp and always do the work.
-Environment=SUGGEST_SCHEDULED=1
+# NOTHING here tells suggest.sh that this is a timer slot, on purpose. It used to
+# be Environment=SUGGEST_SCHEDULED=1, which made the retry-slot guard depend on
+# this file's installed copy staying in step with this template — and it did not:
+# the copy in ~/.config/systemd/user/ predated the retry slots entirely, so the
+# guard was inert and nobody could tell. suggest.sh now reads INVOCATION_ID,
+# which systemd sets for every unit invocation and an interactive shell never
+# has, so a slot is recognised whether or not this file was ever reinstalled.
+# (tests/check_units.sh checks the installed copies against these templates.)
 # suggest.sh holds its own flock (separate from process.sh's), so an overlapping
 # fire is a harmless no-op, and it can run alongside a transcription batch.
 #

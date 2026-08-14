@@ -548,6 +548,14 @@ a profileless run still resolves to exactly the numbers below.
 - `NEW_SLACK_EVERY` (25) — proportional mercy: one model-written sentence is
   tolerated per this many sentences of post, so a single slip can't sink a
   long post while shorts stay at zero.
+- `VOICE_TWEAK_GAP` (0) — the one rule that differs between the corpus's two
+  mouths. Cutting a sentence's *ends* is already free for every source (what
+  remains is still a substring of the note, so it grades verbatim); this is how
+  many words may be cut out of a sentence's *middle* — a false start, an aside —
+  with the result still counting as the author's. It applies only to sentences
+  found in a dictated bundle, on the grounds that he chose the words in a typed
+  note and could see them while he did, whereas a stumble in a voice memo is an
+  artefact of speaking. `0` disables it and is the default.
 - `REJECT_DAYS` (30) — how long gate-rejected candidates stay in `Posts/Rejected/`.
 - `REUSE_MIN_WORDS` (6) / `REUSE_DROP_PCT` (75) — sentence-reuse damping: shorter
   sentences are always free; longer ones already in a live post are enforced

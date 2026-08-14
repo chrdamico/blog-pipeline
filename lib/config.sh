@@ -298,6 +298,29 @@ ARCHIVE_DAYS="${ARCHIVE_DAYS:-14}"
 VERBATIM_MIN="${VERBATIM_MIN:-85}"
 GLUE_MAX_WORDS="${GLUE_MAX_WORDS:-12}"
 NEW_SLACK_EVERY="${NEW_SLACK_EVERY:-25}"
+
+# How many words the gate lets a candidate sentence CUT OUT OF ITS MIDDLE and
+# still count as the author's sentence (TWEAKED) rather than as the model's
+# prose — and only when the sentence is found in a DICTATED note. 0 disables it,
+# which is the shipped default: the gate then behaves exactly as it did before
+# this knob existed.
+#
+# The middle is the part that needed a knob. Cutting a sentence's ENDS is
+# already free for every source, because source_of does a substring search over
+# the whole note: drop "so I guess what I'm saying is" off the front of a spoken
+# sentence and what remains is still literally present in the note, so it grades
+# VERBATIM. What no amount of end-trimming can close is a hole — "the plan, no
+# wait, the plan depends on one connector" cut down to "the plan depends on one
+# connector" is two runs of his words with something removed between them, and
+# nothing in the gate could see that as his.
+#
+# Which is right for typed notes and wrong for dictation. He chose the words in
+# a typed note and could see them while he did; the false starts in a voice memo
+# are an artefact of speaking, and cutting one is closer to transcription than
+# to editing. So the licence is granted per mouth, and the cap keeps it local: a
+# hole of a few words is a restart, a hole of thirty is two unrelated thoughts
+# welded together and must still fail.
+VOICE_TWEAK_GAP="${VOICE_TWEAK_GAP:-0}"
 REJECT_DAYS="${REJECT_DAYS:-30}"
 REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
 REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
@@ -355,6 +378,7 @@ STRUCTURE SYNC_KEEP_DAYS
 WHISPER_LANG WHISPER_MARKS WHISPER_CONF_LOW WHISPER_CONF_VLOW
 MAX_LONG MAX_SHORT MAX_NEW TRASH_DAYS CORPUS_MAX HISTORY_LINES ARCHIVE_DAYS
 VERBATIM_MIN GLUE_MAX_WORDS NEW_SLACK_EVERY GATE_MODE GATE_TRACE REJECT_DAYS
+VOICE_TWEAK_GAP
 REUSE_MIN_WORDS REUSE_DROP_PCT
 TYPO_FIX TYPO_MIN_LEN TYPO_MAX_PCT
 NAME_SCAN

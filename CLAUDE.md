@@ -6,20 +6,53 @@ systemd timers run `bin/process.sh` (every 15 min) and `bin/suggest.sh`
 minutes**, so run the tests after any edit:
 
 ```sh
-bash tests/check_defaults.sh     # the config layer resolves to today's values
-bash tests/check_gate.sh         # gate seams change no verdict; report mode is sandbox-only
-bash tests/check_provenance.sh   # meta.json stays valid JSON; a reclean keeps the audio identity
-bash tests/check_privacy.sh      # nothing personal is committed
-bash tests/check_typo_gate.sh
+bash tests/run_all.sh            # every tests/check_*.sh, with what each one guards
 ```
 
-None of them call a model, so they are free and fast — run all five.
+None of them call a model, so they are free and fast — run the lot, always. Use
+the runner rather than a list of filenames: this section used to name five tests
+when there were six, and the one it left out was the privacy backstop's.
+
+`check_units.sh` is the one that can fail for a reason outside the repo — it
+compares the systemd units installed under `~/.config/systemd/user/` against the
+templates in `watcher/`, and they had silently drifted apart. If it fails,
+either `bash install.sh` (adopt the repo's schedule) or change the template
+(adopt the machine's). It is telling you the two disagree, not which is right.
+
+## The map
+
+Nine files do the work. Read them in this order and the pipeline is legible:
+
+```
+lib/config.sh      every knob, resolved in one place. Profiles, arms, BLOG_ROOT
+                   re-rooting, the variant fingerprint. Nothing here writes.
+lib/common.sh      the small things more than one script needs: file times,
+                   slugs, frontmatter, which pools exist.
+lib/claude.sh      the ONE way a model is called: stdin in, text out, no tools.
+lib/provenance.sh  what produced this artifact, recorded as it is produced.
+lib/text.awk       blog_norm() and the sentence splitter — the primitives every
+                   comparison in the pipeline must agree on, defined once.
+lib/gate.awk       the stitching gate. The pillar: is this really his sentence?
+lib/claims.awk     what a kept post has spent, read out of its provenance report.
+bin/process.sh     capture: audio -> transcript -> cleaned -> a draft bundle.
+bin/suggest.sh     the curator: corpus -> candidates -> gate -> pool -> arms.
+```
+
+The rest are entry points over those: `bin/arm.sh` (live A/B arms), `bin/ab.sh`
+(offline experiments), `bin/score.sh` (what the pool did), `bin/stats.sh`,
+`bin/reclean.sh`, `bin/note.sh`, `bin/transcribe.sh`.
+
+`bin/suggest.sh --help` prints its stage list, which is the shortest true answer
+to "what does a run actually do".
 
 Where things stand (2026-08-13). The base is `profiles/base.env`: arm **D**'s
 quotas (`MAX_NEW=60` proposed into `MAX_LONG=4` + `MAX_SHORT=8`, `VERBATIM_MIN=55`,
 `NEW_SLACK_EVERY=6`, `GLUE_MAX_WORDS=20`, `GATE_TRACE=1`) plus
 `CURATE_DIRECTIVE=…/tournament.md`. Active arms: **massive**, **middle** —
-both curator-stage rewrite licences, differing in `VERBATIM_MIN`. Promoted:
+both curator-stage rewrite licences, differing in `VERBATIM_MIN` — and
+**voice-loose** (2026-08-14), the first arm to treat the corpus's two mouths
+differently: typed notes are to be used as written, dictated ones may lose a
+false start from the middle (`VOICE_TWEAK_GAP=8`). Promoted:
 **D**, **nofiller**. Retired: **mosaic** (2026-08-14). The base also pins
 `CLEANUP_DIRECTIVE=…/cleanup-nofiller.md`, from the `nofiller` arm: cleanup cuts
 the author's sentence-opening hedges ("I think" opened about one sentence in five
@@ -182,6 +215,17 @@ bin/ab.sh score               # ONLINE metric: what the live pool did per varian
   additive `build_claimed` fix that would make recleaning safe, is in
   `bin/reclean.sh`'s header. Do not instead relax `norm()` — that would let the
   curator drop words at stitch time and still be graded VERBATIM.
+- **The gate already lets any sentence be cut at its ENDS.** `source_of` does an
+  `index()` substring search over the whole note, so a sentence with its run-up
+  or its trailing "or something like that" removed is still literally present in
+  the note and grades VERBATIM — no licence involved, for either mouth. What the
+  gate cannot see as the author's is a HOLE: cut a false start out of the middle
+  and the two surviving runs no longer form a substring, and no amount of
+  end-trimming in `tweaked_source_of` closes that. So an experiment about
+  "allowing more editing" that widens the end-trim budget is measuring nothing —
+  it is loosening a constraint that was never binding. `VOICE_TWEAK_GAP` is the
+  knob that addresses the real one (one hole, capped in words, dictated notes
+  only, off by default). Verified both ways in `tests/check_gate.sh` §4b.
 
 ## Conventions
 

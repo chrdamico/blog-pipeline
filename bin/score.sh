@@ -34,6 +34,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/common.sh
+. "$REPO_DIR/lib/common.sh"
 
 GROUP=variant
 SINCE=""
@@ -52,35 +54,21 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-fm() {   # $1 file, $2 key — frontmatter only
-  awk -v k="$2" '
-    NR == 1 && $0 != "---" { exit }
-    NR > 1  && $0 == "---" { exit }
-    NR > 1 { if (index($0, k ": ") == 1) { print substr($0, length(k) + 3); exit } }' "$1"
-}
-
-file_date() { date -d "@$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1")" '+%Y-%m-%d' 2>/dev/null \
-                || date -r "$(stat -f %m "$1")" '+%Y-%m-%d'; }
+# fm_field, file_date and all_pools come from lib/common.sh. They used to live
+# here too, under the names fm() and pool_dirs() — two names for functions that
+# have to give bin/suggest.sh and this script the SAME answer, or a post is
+# counted under one arm while its sentences are claimed under another.
 
 # --- one row per post that still exists --------------------------------------
-# state  variant  persona  created  state_date  id
+# state  variant  persona  created  state_date  id  arm
 #
 # A post's identity is its basename: the pipeline never renames one, it only
 # moves it between Posts/, Keep/ and Discarded/ — which is exactly what makes
 # the move readable as a verdict.
-# Every pool folder: the base's, plus one per arm. An arm's posts are in the
-# pool too — they are just in a folder of their own — and counting them as gone
-# would make every arm look like it loses everything it proposes.
-pool_dirs() {
-  printf '%s\n' "$POSTS"
-  local d
-  shopt -s nullglob
-  for d in "$POSTS"/*/; do
-    case "$(basename "${d%/}")" in Keep|Discarded|Rejected) continue ;; esac
-    printf '%s\n' "${d%/}"
-  done
-  shopt -u nullglob
-}
+# Every pool folder — the base's, plus one per arm — is all_pools in
+# lib/common.sh. An arm's posts are in the pool too, just in a folder of their
+# own, and counting them as gone would make every arm look like it loses
+# everything it proposes.
 
 posts_tsv() {
   local f state dir variant persona created sdate id arm
@@ -88,7 +76,7 @@ posts_tsv() {
   # A while-read rather than mapfile: this repo still means to run on macOS,
   # whose /bin/bash is 3.2 and has no mapfile.
   local dirs=() d
-  while IFS= read -r d; do dirs+=("$d"); done < <(pool_dirs)
+  while IFS= read -r d; do dirs+=("$d"); done < <(all_pools)
   dirs+=("$POSTS/Keep" "$TRASH" "$REJECTED")
   for dir in "${dirs[@]}"; do
     case "$dir" in
@@ -99,12 +87,12 @@ posts_tsv() {
     esac
     for f in "$dir"/*.md; do
       id="$(basename "$f" .md)"
-      variant="$(fm "$f" variant)"; [ -n "$variant" ] || variant=pre-experiment
-      persona="$(fm "$f" persona)"; [ -n "$persona" ] || persona='(none)'
+      variant="$(fm_field "$f" variant)"; [ -n "$variant" ] || variant=pre-experiment
+      persona="$(fm_field "$f" persona)"; [ -n "$persona" ] || persona='(none)'
       # The arm is written into every post since the live-arm step; anything
       # older belongs to the base, which is what it was made by.
-      arm="$(fm "$f" arm)"; [ -n "$arm" ] || arm=base
-      created="$(fm "$f" created)"; [ -n "$created" ] || created="$(file_date "$f")"
+      arm="$(fm_field "$f" arm)"; [ -n "$arm" ] || arm=base
+      created="$(fm_field "$f" created)"; [ -n "$created" ] || created="$(file_date "$f")"
       # mtime means different things by directory, and both are the ones we
       # want: eviction resets it in Discarded/, so it dates the eviction.
       sdate="$(file_date "$f")"
@@ -124,7 +112,7 @@ posts_tsv() {
 # adjacent tabs into one — and the empty field between them is the persona.
 gone_tsv() {
   [ -s "$PROVENANCE_TSV" ] || return 0
-  { while IFS= read -r d; do ls "$d"/*.md 2>/dev/null || true; done < <(pool_dirs)
+  { while IFS= read -r d; do ls "$d"/*.md 2>/dev/null || true; done < <(all_pools)
     ls "$POSTS"/Keep/*.md "$TRASH"/*.md "$REJECTED"/*.md 2>/dev/null || true; } \
     | sed 's#.*/##; s#\.md$##' | sort -u > "$tmp/live_ids"
   awk -F'\t' '
@@ -160,7 +148,10 @@ trap 'rm -rf "$tmp"' EXIT
 all_posts() { { posts_tsv; gone_tsv; } | { [ -z "$SINCE" ] && cat || awk -F'\t' -v s="$SINCE" '$4 >= s'; }; }
 
 if [ "$MODE" = posts ]; then
-  printf 'state\tvariant\tpersona\tcreated\tstate_date\tid\n'
+  # Seven columns, and the header used to name six — `arm` is the one posts_tsv
+  # prints and this line forgot, which shifts every field for anything reading
+  # this by name.
+  printf 'state\tvariant\tpersona\tcreated\tstate_date\tid\tarm\n'
   all_posts | sort -t$'\t' -k4,4
   exit 0
 fi

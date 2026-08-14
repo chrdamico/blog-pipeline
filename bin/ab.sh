@@ -39,6 +39,8 @@ AB_INHERITED_ENV="$(env | sed 's/=.*//' | LC_ALL=C sort -u)"
 
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/claude.sh
+. "$REPO_DIR/lib/claude.sh"
 
 EVAL="${EVAL_DIR:-$BLOG_REPO_DIR/eval}"
 FIXTURES="$EVAL/fixtures"
@@ -700,11 +702,10 @@ judge_pair() {
     printf '\n\n===== BEGIN A =====\n%s\n===== END A =====\n' "$left"
     printf '\n===== BEGIN B =====\n%s\n===== END B =====\n' "$right"
   } > "$work/in"
-  ( cd "$work" && "$CLAUDE_BIN" -p --model "$model" --output-format text \
-      --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" \
-  ) < "$work/in" > "$work/out" 2>/dev/null || true
-  printf '%s\t%s\t%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "judge:$EXP_NAME" "$model" \
-    "$(wc -c < "$work/in" | tr -d ' ')" "$(wc -c < "$work/out" | tr -d ' ')" >> "$USAGE_TSV"
+  # The judge is a Claude call like any other, so it goes through lib/claude.sh:
+  # no tools, and one row in the usage ledger. A judge that failed is a missing
+  # verdict, not a failed experiment, hence the `|| true`.
+  blog_claude "$work/in" "$work/out" "$model" "judge:$EXP_NAME" 2>/dev/null || true
   { grep -m1 -oE '^(VERDICT: *)?(A|B|TIE)\b' "$work/out" 2>/dev/null || true; } \
     | sed 's/^VERDICT: *//' | head -1
 }

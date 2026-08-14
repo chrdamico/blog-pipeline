@@ -74,6 +74,10 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=../lib/config.sh
 . "$REPO_DIR/lib/config.sh"
+# shellcheck source=../lib/common.sh
+. "$REPO_DIR/lib/common.sh"
+# shellcheck source=../lib/claude.sh
+. "$REPO_DIR/lib/claude.sh"
 # shellcheck source=../lib/provenance.sh
 . "$REPO_DIR/lib/provenance.sh"
 
@@ -100,45 +104,6 @@ notify() {
   "$NOTIFY" "$1" "${2:-}" >/dev/null 2>&1 || log "WARN notify failed: $1"
 }
 
-# --- portable primitives (mirroring process.sh) ------------------------------
-file_mtime_epoch() {
-  # GNU stat first, then BSD/macOS stat
-  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"
-}
-
-epoch_to_date() {
-  # GNU date first, then BSD/macOS date
-  date -d "@$1" '+%Y-%m-%d' 2>/dev/null || date -r "$1" '+%Y-%m-%d'
-}
-
-# When the note was CREATED, as best the filesystem knows. Both available
-# clocks overshoot creation in different ways — birth time (GNU stat %W, 0 =
-# unknown; BSD/macOS stat -f %B) is when Syncthing first wrote the LOCAL file,
-# mtime is the last edit (Syncthing preserves the phone's) — so the earlier of
-# the two is the closest estimate. mv preserves both: never the archival date.
-file_created_epoch() {
-  local b m
-  m="$(file_mtime_epoch "$1")"
-  b="$(stat -c %W "$1" 2>/dev/null || stat -f %B "$1" 2>/dev/null || echo 0)"
-  case "$b" in ''|*[!0-9]*) b=0 ;; esac
-  if [ "$b" -gt 0 ] && [ "$b" -lt "$m" ]; then printf '%s' "$b"; else printf '%s' "$m"; fi
-}
-
-# Content hash of a file (mirroring process.sh's, for the same reason: identity
-# by content, so a rename is not a new file).
-sha256() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'   # macOS
-  fi
-}
-
-# Portable line shuffle (shuf is GNU-only): decorate with rand(), sort, strip.
-shuffle_lines() {
-  awk 'BEGIN { srand() } { printf "%.9f\t%s\n", rand(), $0 }' | sort -n | cut -f2-
-}
-
 # --- single-instance lock (its own, independent of process.sh) --------------
 LOCK_CREATED_DIR=""
 acquire_lock() {
@@ -154,98 +119,32 @@ acquire_lock() {
 }
 
 # --- helpers ----------------------------------------------------------------
-# Read text on stdin, emit a filesystem-safe slug from the first ~6 words.
-slugify() {
-  local s
-  s="$(sed -e 's/Ä/Ae/g' -e 's/Ö/Oe/g' -e 's/Ü/Ue/g' \
-       | tr '[:upper:]' '[:lower:]' \
-       | sed -e 's/ä/ae/g' -e 's/ö/oe/g' -e 's/ü/ue/g' -e 's/ß/ss/g' \
-       | tr -c 'a-z0-9' ' ' \
-       | tr -s ' ')"
-  # shellcheck disable=SC2086  # deliberate word-split; only [a-z0-9 ] remain
-  set -- $s
-  local out="" i=0 w
-  for w in "$@"; do
-    out="${out:+$out-}$w"
-    i=$((i + 1))
-    [ "$i" -ge 6 ] && break
-  done
-  printf '%s' "$out"
+# A post stripped to its prose: no frontmatter, and no "# Title" line either —
+# the generator adds that heading AFTER the gate has run, so anything comparing a
+# post back against the corpus (backfill_provenance) has to take it off again,
+# and the curator is shown `title:` on a line of its own so an excerpt that
+# repeated it would just be spending tokens twice.
+#
+# There used to be two of these, 1000 lines apart and both called post_body: one
+# keeping the heading, one dropping it. The second silently won for both callers,
+# which is how the curator's excerpt lost its title line without anyone deciding
+# that. One function, one name, and the name says which it is.
+post_prose() {
+  awk 'NR == 1 && $0 == "---" { fm = 1; next }
+       fm == 1 && $0 == "---"  { fm = 2; next }
+       fm == 1                 { next }
+       !h1 && /^# /            { h1 = 1; next }
+       { print }' "$1"
 }
 
-# First non-existing variant of <base>.<ext>, adding -2, -3, ... on collision.
-dedup_file() {
-  local base="$1" ext="$2" dest="$1.$2" n=2
-  while [ -e "$dest" ]; do dest="${base}-${n}.${ext}"; n=$((n + 1)); done
-  printf '%s' "$dest"
-}
-
-dedup_md() { dedup_file "$1" md; }
-
-# Value of a single-line YAML frontmatter key, or empty. Header region only, so
-# a body line that happens to start with "title:" can't shadow the real one.
-fm_field() {
-  awk -v k="$2" '
-    NR == 1 && $0 != "---" { exit }
-    NR > 1  && $0 == "---" { exit }
-    NR > 1 {
-      if (index($0, k ": ") == 1) { print substr($0, length(k) + 3); exit }
-    }' "$1"
-}
-
-# Frontmatter `sources:` list, flattened to a comma-separated line.
-fm_sources() {
-  awk '
-    NR == 1 && $0 != "---" { exit }
-    NR > 1  && $0 == "---" { exit }
-    /^sources:/ { insrc = 1; next }
-    insrc && /^  - / { printf "%s%s", sep, substr($0, 5); sep = ", " }
-    insrc && !/^  - / { exit }
-    END { print "" }' "$1"
-}
-
-# The post minus its frontmatter.
-post_body() {
-  awk '
-    NR == 1 && $0 == "---" { fm = 1; next }
-    fm == 1 && $0 == "---" { fm = 2; next }
-    fm != 1 { print }' "$1"
-}
-
-# A pool file's kind: frontmatter first, filename as a fallback. Empty means
-# "not ours" — such a file is left strictly alone by curation.
-pool_kind_of() {
-  local k
-  k="$(fm_field "$1" kind)"
-  if [ -z "$k" ]; then
-    # Anchored to the date prefix our own names carry, so a slug that happens
-    # to contain "-long-" (…-short-a-long-day.md) can't lie about its kind.
-    case "$(basename "$1")" in
-      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-long-*)  k=long ;;
-      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-short-*) k=short ;;
-    esac
-  fi
-  printf '%s' "$k"
-}
-
-# Run one Claude call over a prepared stdin stream. Same contract as
-# process.sh's claude_transform: subscription auth, never an API key; run from
-# work/ with FS/exec tools denied, so the call can only read stdin and write
-# stdout. $1 = stream file, $2 = output file, $3 = model (default CLAUDE_MODEL —
-# the typo pass is the one caller that overrides it).
+# One Claude call over a prepared stdin stream — the curator's stages assemble
+# their own (generate, the name scout, curation, the typo pass), unlike cleanup,
+# which shares an assembly with reclean.sh. The invocation and the usage ledger
+# are lib/claude.sh, the same ones every other stage uses.
+# $1 = stream file, $2 = output file, $3 = model (default CLAUDE_MODEL — the typo
+# pass is the one caller that overrides it).
 claude_call() {
-  local rc=0 model="${3:-$CLAUDE_MODEL}"
-  ( cd "$WORK" && "$CLAUDE_BIN" -p \
-      --model "$model" \
-      --output-format text \
-      --disallowedTools "Bash Edit Write Read Glob Grep WebFetch WebSearch NotebookEdit Task" \
-  ) < "$1" > "$2" || rc=$?
-  # Usage ledger (see bin/stats.sh): stream sizes in chars — ~4 chars/token is
-  # close enough for a gut feeling, which is all this is for.
-  printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$(date '+%Y-%m-%dT%H:%M:%S%z')" suggest "$model" \
-    "$(wc -c < "$1" | tr -d ' ')" "$(wc -c < "$2" | tr -d ' ')" >> "$USAGE_TSV"
-  return $rc
+  blog_claude "$1" "$2" "${3:-$CLAUDE_MODEL}" suggest
 }
 
 # --- verbatim gate ------------------------------------------------------------
@@ -279,165 +178,27 @@ claude_call() {
 #                      question about rewriting. VERBATIM lines need no diff:
 #                      they are the source, character for character.
 #
-# The annotation is an extra `  ~ ...` line under the sentence it belongs to, so
-# the report's classification lines keep the shape everything else reads them by
-# (build_claimed takes VERBATIM/TWEAKED, the last line stays the verdict).
+# Annotations are extra INDENTED lines under the sentence they belong to, so the
+# report's classification lines keep the shape everything else reads them by
+# (lib/claims.awk takes VERBATIM/TWEAKED, the last line stays the verdict):
+# `~ nearest` is the trace guess above, and `= source` is the note sentence a
+# TWEAKED one was actually cut down from — which is what makes a tweak claimable
+# at all (lib/gate.awk explains why, at length).
+#
+# The mechanism is lib/gate.awk, and the primitives it shares with every other
+# comparison in this file are lib/text.awk. It is a FILE and not a string pasted
+# in here because it is the pillar: it can be read, run against a fixture and
+# diffed on its own, and blog_norm() stops existing in five copies that a comment
+# asked to stay identical.
 #
 # $1 = body file, $2 = corpus file (with "### NOTE id=" markers). The report
 # goes to stdout; the exit status is the verdict.
 verbatim_gate() {
-  awk -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" \
-      -v new_every="$NEW_SLACK_EVERY" -v mode="$GATE_MODE" -v trace="$GATE_TRACE" '
-    function norm(s) {
-      gsub(/[\342\200\230\342\200\231]/, "\x27", s)   # curly apostrophes
-      gsub(/[\342\200\234\342\200\235]/, "\"", s)     # curly double quotes
-      gsub(/[[:space:]]+/, " ", s)
-      sub(/^ +/, "", s); sub(/ +$/, "", s)
-      return tolower(s)
-    }
-    # which note contains s verbatim? empty if none
-    function source_of(s,   i) {
-      for (i = 1; i <= nids; i++) if (index(ntext[ids[i]], s)) return ids[i]
-      return ""
-    }
-    # seam trims: drop up to 3 words from either end; accept if what remains is
-    # still most of the sentence and is verbatim somewhere
-    function tweaked_source_of(s,   w, n, a, b, core, i, src) {
-      n = split(s, w, " ")
-      for (a = 0; a <= 3; a++) for (b = 0; b <= 3; b++) {
-        if (a + b == 0 || n - a - b < 3) continue
-        core = w[a + 1]
-        for (i = a + 2; i <= n - b; i++) core = core " " w[i]
-        if (length(core) >= 0.6 * length(s)) {
-          src = source_of(core)
-          if (src != "") return src
-        }
-      }
-      return ""
-    }
-    # --- tracing: which corpus sentence is this one a rewrite OF? ---------------
-    # Split every note into sentences once, then score a candidate sentence
-    # against all of them by shared words (intersection over union). Only built
-    # when tracing is on: it is the expensive half of this gate.
-    function build_index(   i, k, m, parts, t) {
-      for (i = 1; i <= nids; i++) {
-        t = ntext[ids[i]]
-        gsub(/[.!?] /, "&\n", t)
-        m = split(t, parts, "\n")
-        for (k = 1; k <= m; k++) {
-          if (length(parts[k]) < 16) continue
-          csent[++nsent] = parts[k]; csrc[nsent] = ids[i]
-        }
-      }
-    }
-    function similarity(a, b,   wa, wb, na, nb, i, seen, common, union) {
-      na = split(a, wa, " "); nb = split(b, wb, " ")
-      delete seen
-      for (i = 1; i <= na; i++) seen[wa[i]] = 1
-      common = 0
-      delete seen2
-      for (i = 1; i <= nb; i++) {
-        if (wb[i] in seen2) continue
-        seen2[wb[i]] = 1
-        if (wb[i] in seen) common++
-      }
-      union = 0
-      for (i in seen) union++
-      for (i in seen2) if (!(i in seen)) union++
-      return union ? common / union : 0
-    }
-    # A word-level diff of two sentences, in the same shape git word-diff uses:
-    # [-dropped-] {+added+}. LCS over two ~20-word sequences, which is nothing.
-    function word_diff(a, b,   wa, wb, na, nb, i, j, L, out) {
-      na = split(a, wa, " "); nb = split(b, wb, " ")
-      for (i = 0; i <= na; i++) L[i, 0] = 0
-      for (j = 0; j <= nb; j++) L[0, j] = 0
-      for (i = 1; i <= na; i++) for (j = 1; j <= nb; j++)
-        L[i, j] = (wa[i] == wb[j]) ? L[i - 1, j - 1] + 1 \
-                  : (L[i - 1, j] >= L[i, j - 1] ? L[i - 1, j] : L[i, j - 1])
-      i = na; j = nb; out = ""
-      while (i > 0 || j > 0) {
-        if (i > 0 && j > 0 && wa[i] == wb[j])            { out = wa[i] " " out; i--; j-- }
-        else if (j > 0 && (i == 0 || L[i, j - 1] >= L[i - 1, j])) { out = "{+" wb[j] "+} " out; j-- }
-        else                                             { out = "[-" wa[i] "-] " out; i-- }
-      }
-      sub(/ $/, "", out)
-      return out
-    }
-    # The annotation line under a non-verbatim sentence.
-    function annotate(s,   i, sim, best, bi) {
-      if (!trace) return
-      if (!indexed) { build_index(); indexed = 1 }
-      best = 0; bi = 0
-      for (i = 1; i <= nsent; i++) {
-        sim = similarity(s, csent[i])
-        if (sim > best) { best = sim; bi = i }
-      }
-      if (bi == 0 || best < 0.3) {
-        printf "  ~ nearest   (nothing in the corpus above 30%% — this sentence is the model'"'"'s)\n"
-        return
-      }
-      printf "  ~ nearest   [%s] %d%%: %s\n", csrc[bi], best * 100 + 0.5, word_diff(csent[bi], s)
-    }
-    NR == FNR {   # first file: the corpus, keyed by note id
-      if ($0 ~ /^### NOTE id=/) { id = substr($0, 13); ids[++nids] = id; next }
-      if (id != "") raw[id] = raw[id] " " $0
-      next
-    }
-    FNR == 1 { for (i = 1; i <= nids; i++) ntext[ids[i]] = norm(raw[ids[i]]) }
-    {         # second file: the candidate body, markdown decorations stripped.
-      # Lines are joined with \n, NOT a space: a line break is a sentence
-      # boundary too, or an unpunctuated line ending (the author writes those)
-      # fuses with the next sentence into a phantom "sentence" that exists
-      # nowhere in the corpus and falsely reads as NEW. A real sentence
-      # wrapped across lines just splits into fragments, and a fragment of a
-      # verbatim sentence still matches as a substring.
-      line = $0
-      sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", line)
-      body = body "\n" line
-    }
-    END {
-      gsub(/[.!?][[:space:]]+/, "&\n", body)
-      n = split(body, sents, "\n")
-      for (i = 1; i <= n; i++) {
-        s = norm(sents[i])
-        if (length(s) < 16) continue    # too short to judge; free either way
-        counted++
-        d = sents[i]; gsub(/[[:space:]]+/, " ", d); sub(/^ /, "", d)
-        src = source_of(s)
-        if (src != "") {
-          verbatim++; printf "- VERBATIM [%s] %s\n", src, d
-        } else if ((src = tweaked_source_of(s)) != "") {
-          tweaked++;  printf "- TWEAKED  [%s] %s\n", src, d; annotate(s)
-        } else if (split(s, wtmp, " ") <= glue_max) {
-          glue++;     printf "- GLUE     %s\n", d; annotate(s)
-        } else {
-          new_++;     printf "- NEW      %s\n", d; annotate(s)
-        }
-      }
-      allowed_glue = int(counted * (100 - min_pct) / 100)
-      if (allowed_glue < 1) allowed_glue = 1
-      # Proportional mercy for NEW: one model-written sentence tolerated per
-      # new_every sentences of post. Short posts (< new_every sentences) stay
-      # at zero — in 8 sentences, 1 invented one is an eighth of the post; in
-      # 46 it is noise the author will delete on review.
-      allowed_new = int(counted / new_every)
-      pass = (counted > 0 && new_ <= allowed_new && glue <= allowed_glue)
-      # Report mode never rejects — but it never lies about it either: the
-      # verdict word stays PASS (that is what the script acts on) and the line
-      # says out loud that enforcement was off and what would have happened.
-      # logs/gate.tsv keeps the whole line, so a report-mode run is still
-      # countable afterwards.
-      note = ""
-      if (mode == "report") {
-        note = pass ? "  [report mode: enforcement off]" \
-                    : "  [report mode: enforcement off — would have FAILED]"
-        pass = 1
-      }
-      printf "\ngate: %s — %d verbatim, %d tweaked, %d glue (max %d), %d new (max %d) of %d sentences%s\n",
-             pass ? "PASS" : "FAIL", verbatim, tweaked, glue, allowed_glue, new_, allowed_new, counted, note
-      exit pass ? 0 : 1
-    }' "$2" "$1"
+  awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/gate.awk" \
+      -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" \
+      -v new_every="$NEW_SLACK_EVERY" -v mode="$GATE_MODE" -v trace="$GATE_TRACE" \
+      -v v_gap="$VOICE_TWEAK_GAP" \
+      "$2" "$1"
 }
 
 # --- anonymization ------------------------------------------------------------
@@ -607,39 +368,13 @@ apply_aliases_outside_sources() {
 }
 
 # --- pools -------------------------------------------------------------------
-# Every pool folder that exists: the base's (the Posts/ root, where it has
-# always been) plus one per live arm (Posts/<arm>/). Keep/, Discarded/ and
-# Rejected/ are shared and are NOT pools — a post there has already been judged,
-# and its arm rides in its frontmatter.
+# all_pools and all_post_files are in lib/common.sh: bin/score.sh needs the same
+# answers, and it used to reach them through a second copy under a second name.
 #
-# A run only ever writes into $POOL, its own. These two exist for the things
-# that must see every post regardless of arm: the alias sweep (a real name is a
-# leak wherever it sits), the source-path rewrites after a note is renamed, and
-# the filename-collision check.
-all_pools() {
-  printf '%s\n' "$POSTS"
-  local d
-  shopt -s nullglob
-  for d in "$POSTS"/*/; do
-    case "$(basename "${d%/}")" in Keep|Discarded|Rejected) continue ;; esac
-    printf '%s\n' "${d%/}"
-  done
-  shopt -u nullglob
-}
-
-# All post files. With no argument: the pools only. With "judged": the shared
-# Keep/, Discarded/ and Rejected/ as well.
-all_post_files() {
-  local want="${1:-}" d f
-  shopt -s nullglob
-  while IFS= read -r d; do
-    for f in "$d"/*.md; do printf '%s\n' "$f"; done
-  done < <(all_pools)
-  if [ "$want" = judged ]; then
-    for f in "$POSTS"/Keep/*.md "$TRASH"/*.md "$REJECTED"/*.md; do printf '%s\n' "$f"; done
-  fi
-  shopt -u nullglob
-}
+# A run only ever WRITES into $POOL, its own. Those two exist for the things that
+# must see every post regardless of arm: the alias sweep (a real name is a leak
+# wherever it sits), the source-path rewrites after a note is renamed, and the
+# filename-collision check.
 
 alias_sweep() {
   [ -s "$ALIASES" ] || return 0
@@ -777,9 +512,18 @@ record_gate() {   # $1 PASS|REJECTED  $2 kind  $3 title  $4 gate summary
 
 # Exact-string replacement (no regex, so arbitrary filenames are safe).
 #   $1 = old string, $2 = new string, $3 = file, edited in place
+#
+# mtime is PRESERVED, the same way alias_sweep preserves it: the only thing this
+# rewrites is a `sources:` path after a note was renamed, which is bookkeeping
+# about a file, not a new version of it. A post's mtime is load-bearing — it is
+# the eviction clock Discarded/ and Rejected/ are reaped on, and the date
+# bin/score.sh reads as "when was this decided" — so bumping it here would extend
+# a retention window and tell the scorer a post was evicted today.
 replace_in_file() {
-  local tmpf
+  local tmpf ref
   tmpf="$(mktemp "$WORK/.repl.XXXXXX")"
+  ref="$(mktemp "$WORK/.repl.ref.XXXXXX")"
+  cp -p "$3" "$ref"
   awk -v old="$1" -v new="$2" '
     {
       line = $0; out = ""
@@ -789,6 +533,8 @@ replace_in_file() {
       }
       print out line
     }' "$3" > "$tmpf" && mv "$tmpf" "$3" || rm -f "$tmpf"
+  touch -r "$ref" "$3" 2>/dev/null || true
+  rm -f "$ref"
 }
 
 # --- txt normalization --------------------------------------------------------
@@ -807,12 +553,17 @@ normalize_txt_notes() {
     mv "$f" "$dest"
     renamed=$((renamed + 1))
     log "TXT->MD $old_rel -> $new_rel"
-    for p in $(all_post_files judged) "$PROVENANCE"/*.md; do
+    # A `while read` over a stream, NOT `for p in $(...)`: command substitution
+    # word-splits, so a post whose name carries a space (you rename them by hand
+    # on the phone) was silently skipped and kept a `sources:` line pointing at a
+    # file that no longer exists. Proven, with two kept posts citing one note:
+    # plain-post.md was updated and "My favourite post.md" was not.
+    while IFS= read -r p; do
       [ -f "$p" ] || continue
       grep -qF "$old_rel" "$p" || continue
       replace_in_file "$old_rel" "$new_rel" "$p"
       log "TXT->MD updated source ref in $(basename "$p")"
-    done
+    done < <(all_post_files judged; printf '%s\n' "$PROVENANCE"/*.md)
   done
   shopt -u nullglob
 }
@@ -838,7 +589,7 @@ archive_notes() {
       *)
         date="$(epoch_to_date "$(file_created_epoch "$f")")"
         first="$(head -n 1 "$f" | sed 's/^#\+[[:space:]]*//')"
-        slug="$(printf '%s' "$first" | slugify)"
+        slug="$(printf '%s' "$first" | blog_slugify)"
         [ -n "$slug" ] || slug="note"
         dest="$(dedup_file "$ARCHIVE/${date}-${slug}" "$ext")" ;;
     esac
@@ -847,12 +598,17 @@ archive_notes() {
     mv "$f" "$dest"
     moved=$((moved + 1))
     log "ARCHIVE $old_rel -> $new_rel"
-    for p in $(all_post_files) "$POSTS"/Keep/*.md; do
+    # Same stream, same reason as normalize_txt_notes above: a filename with a
+    # space in it must not fall out of the rewrite. `judged` covers Keep/ (which
+    # this used to glob separately) along with Discarded/ and Rejected/, whose
+    # `sources:` lines dangle exactly as readably; replace_in_file preserves
+    # their mtimes, so their retention clocks do not move.
+    while IFS= read -r p; do
       [ -f "$p" ] || continue
       grep -qF "$old_rel" "$p" || continue
       replace_in_file "$old_rel" "$new_rel" "$p"
       log "ARCHIVE updated source ref in $(basename "$p")"
-    done
+    done < <(all_post_files judged)
   done < <(find "$VAULT" -maxdepth 1 -type f \( -name '*.md' -o -name '*.txt' \) \
              -mtime +"$ARCHIVE_DAYS" 2>/dev/null)
   [ "$moved" -eq 0 ] || log "archived $moved note(s) into Obsidian/Archive/"
@@ -898,7 +654,7 @@ typofix_notes() {
   shopt -s nullglob
   for f in "$VAULT"/*.md "$VAULT"/*.txt "$ARCHIVE"/*.md "$ARCHIVE"/*.txt; do
     [ -s "$f" ] || continue
-    h="$(sha256 "$f")" || continue
+    h="$(blog_sha256 "$f")" || continue
     grep -q "^$h	" "$TYPOFIX_TSV" 2>/dev/null && continue
     rel="${f#"$BLOG_ROOT"/}"
     scanned=$((scanned + 1))
@@ -947,7 +703,7 @@ typofix_notes() {
       log "TYPO $(basename "$f"): $old -> $new"
     done
     fixed_notes=$((fixed_notes + 1))
-    h2="$(sha256 "$f")"
+    h2="$(blog_sha256 "$f")"
     typofix_record "$h"  "$rel" "fixed $n"
     typofix_record "$h2" "$rel" "fixed $n (post)"
   done
@@ -1157,7 +913,14 @@ typo_apply() {
 #
 # Matching runs on the pre-alias text recorded in the provenance reports (the
 # posts themselves are anonymized, so their text no longer equals the notes').
-# The norm() here MUST stay identical to verbatim_gate's.
+# Every side of that comparison normalizes through blog_norm() in lib/text.awk —
+# one definition, shared by the gate and by all three filters below, because when
+# these disagreed by one character the claims stopped matching in silence.
+#
+# A TWEAKED sentence claims TWICE (lib/claims.awk): the wording the post used,
+# and the note sentence it was cut down from. Only the second can ever be found
+# in the corpus, so before it was claimed a trimmed sentence left its original
+# entirely free — which is the leak this pair of files closes.
 
 # Normalized enforced sentences -> three files, one sentence per line:
 #   <$1>.long    claimed by a live long post and enforced this run
@@ -1183,20 +946,8 @@ build_claimed() {
     [ "$post_arm" = "${BLOG_ARM:-base}" ] || continue
     kind="$(pool_kind_of "$pool")"
     case "$kind" in long|short) ;; *) continue ;; esac
-    awk -v min="$REUSE_MIN_WORDS" -v kind="$kind" '
-      function norm(s) {
-        gsub(/[\342\200\230\342\200\231]/, "\x27", s)
-        gsub(/[\342\200\234\342\200\235]/, "\"", s)
-        gsub(/[[:space:]]+/, " ", s)
-        sub(/^ +/, "", s); sub(/ +$/, "", s)
-        return tolower(s)
-      }
-      /^- (VERBATIM|TWEAKED) / {
-        t = $0
-        sub(/^- (VERBATIM|TWEAKED)[[:space:]]+\[[^]]*\][[:space:]]*/, "", t)
-        t = norm(t)
-        if (split(t, w, " ") >= min) printf "%s\t%s\n", kind, t
-      }' "$pv" >> "$raw"
+    awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/claims.awk" \
+        -v min="$REUSE_MIN_WORDS" -v kind="$kind" "$pv" >> "$raw"
   done
   shopt -u nullglob
   # One die per sentence, shared across kinds, so a sentence claimed by a long
@@ -1222,33 +973,8 @@ build_claimed() {
 filter_claimed() {
   local f="$1" claimed="$2"
   if [ ! -s "$claimed" ]; then cat "$f"; return 0; fi
-  awk -v claimedf="$claimed" '
-    function norm(s) {
-      gsub(/[\342\200\230\342\200\231]/, "\x27", s)
-      gsub(/[\342\200\234\342\200\235]/, "\"", s)
-      gsub(/[[:space:]]+/, " ", s)
-      sub(/^ +/, "", s); sub(/ +$/, "", s)
-      return tolower(s)
-    }
-    BEGIN {
-      while ((getline l < claimedf) > 0) claimed[l] = 1
-      close(claimedf)
-    }
-    {
-      line = $0
-      gsub(/[.!?][[:space:]]+/, "&\x01", line)
-      n = split(line, units, "\x01")
-      out = ""
-      for (i = 1; i <= n; i++) {
-        u = units[i]
-        c = u
-        sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", c)
-        c = norm(c)
-        if (c in claimed) out = out "[…] "
-        else out = out u
-      }
-      print out
-    }' "$f"
+  awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/filter_claimed.awk" \
+      -v claimedf="$claimed" "$f"
 }
 
 # Keep only the sentences (one per line, already norm()ed by build_claimed)
@@ -1261,20 +987,8 @@ filter_claimed() {
 filter_to_corpus() {
   local list="$1" corpus="$2"
   [ -s "$list" ] || return 0
-  awk -v listf="$list" '
-    function norm(s) {
-      gsub(/[\342\200\230\342\200\231]/, "\x27", s)
-      gsub(/[\342\200\234\342\200\235]/, "\"", s)
-      gsub(/[[:space:]]+/, " ", s)
-      sub(/^ +/, "", s); sub(/ +$/, "", s)
-      return tolower(s)
-    }
-    { text = text " " $0 }
-    END {
-      text = norm(text)
-      while ((getline l < listf) > 0) if (index(text, l)) print l
-      close(listf)
-    }' "$corpus"
+  awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/filter_to_corpus.awk" \
+      -v listf="$list" "$corpus"
 }
 
 # The kind-scoped half of the rule: candidate body $1 must not contain a
@@ -1285,36 +999,8 @@ filter_to_corpus() {
 reuse_gate() {
   local body="$1" enforced="$2" kind="$3"
   [ -s "$enforced" ] || return 0
-  awk -v listf="$enforced" -v kind="$kind" '
-    function norm(s) {
-      gsub(/[\342\200\230\342\200\231]/, "\x27", s)
-      gsub(/[\342\200\234\342\200\235]/, "\"", s)
-      gsub(/[[:space:]]+/, " ", s)
-      sub(/^ +/, "", s); sub(/ +$/, "", s)
-      return tolower(s)
-    }
-    BEGIN {
-      while ((getline l < listf) > 0) claimed[l] = 1
-      close(listf)
-    }
-    {
-      line = $0
-      sub(/^[[:space:]]*(#+|[-*>]|[0-9]+\.)[[:space:]]+/, "", line)
-      body = body " " line
-    }
-    END {
-      gsub(/[.!?][[:space:]]+/, "&\n", body)
-      n = split(body, sents, "\n")
-      for (i = 1; i <= n; i++) {
-        s = norm(sents[i])
-        if (!(s in claimed)) continue
-        hits++
-        d = sents[i]; gsub(/[[:space:]]+/, " ", d); sub(/^ /, "", d)
-        printf "- REUSED   %s\n", d
-      }
-      if (hits) printf "\ngate: FAIL — %d sentence(s) already carrying a live %s post\n", hits, kind
-      exit hits ? 1 : 0
-    }' "$body"
+  awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/reuse_gate.awk" \
+      -v listf="$enforced" -v kind="$kind" "$body"
 }
 
 # --- corpus -----------------------------------------------------------------
@@ -1441,17 +1127,6 @@ emit_full_corpus() {
   done < <(corpus_files | sort -rn)
 }
 
-# A post file stripped to the text verbatim_gate wants: no frontmatter, and no
-# "# Title" line (the generator adds that after the gate has run, so a
-# reconstruction has to take it back off).
-post_body() {
-  awk 'NR == 1 && $0 == "---" { fm = 1; next }
-       fm == 1 && $0 == "---"  { fm = 2; next }
-       fm == 1                 { next }
-       !h1 && /^# /            { h1 = 1; next }
-       { print }' "$1"
-}
-
 backfill_provenance() {
   local f base id kind rep body corpus="$TMP/corpus.full"
   local n_claim n_sent rebuilt=0
@@ -1482,7 +1157,7 @@ backfill_provenance() {
 
   for f in "${missing[@]}"; do
     base="$(basename "$f")"; id="${base%.md}"
-    post_body "$f" > "$body"
+    post_prose "$f" > "$body"
     # Verdict ignored on purpose (see above) — only the classification lines are
     # wanted, and a FAIL line among them is harmless: build_claimed reads only
     # the VERBATIM/TWEAKED ones.
@@ -1570,8 +1245,17 @@ generate() {
     filter_to_corpus "$tmp/claimed.only_short.all" "$tmp/corpus.md" > "$tmp/claimed.only_short"
     n_res_all="$(cat "$tmp/claimed.only_long.all" "$tmp/claimed.only_short.all" | wc -l | tr -d ' ')"
     n_res="$(cat "$tmp/claimed.only_long" "$tmp/claimed.only_short" | wc -l | tr -d ' ')"
+    # What this number means, because it used to be read as housekeeping and was
+    # in fact the leak: a claim that is not literally in the corpus cannot be
+    # stitched, so telling the model about it is token waste. Two innocent causes
+    # (a tweak's OWN wording never appears in the corpus — that key exists for
+    # reuse_gate, not for the prompt; and a note may not have been sampled when
+    # the corpus is over budget) and one guilty one (a key written from text that
+    # has since been edited — see bin/reclean.sh). If this is much larger than
+    # the run's TWEAKED count while `corpus:` reports nothing omitted, suspect
+    # the third.
     [ "$n_res" -eq "$n_res_all" ] \
-      || log "reserved: $((n_res_all - n_res)) claim(s) whose sentences are not in this corpus — left out of the stream"
+      || log "reserved: $((n_res_all - n_res)) of $n_res_all claim(s) not literally in this corpus — left out of the stream (a tweak's own wording never is; still enforced by reuse_gate)"
     if [ -s "$tmp/claimed.only_long" ] || [ -s "$tmp/claimed.only_short" ]; then
       if [ -s "$tmp/claimed.only_long" ]; then
         printf 'Already carrying a live LONG post — do not use in a new long; free for a short:\n'
@@ -1769,7 +1453,7 @@ write_candidates() {
       # you keep liking them, lower VERBATIM_MIN.
       local rtitle rslug rdest
       rtitle="$(printf '%s' "$title" | apply_aliases "$c.aliases")"
-      rslug="$(printf '%s' "$rtitle" | slugify)"
+      rslug="$(printf '%s' "$rtitle" | blog_slugify)"
       [ -n "$rslug" ] || rslug="untitled"
       rdest="$(dedup_md "$REJECTED/${today}-${kind}-${rslug}")"
       {
@@ -1801,7 +1485,7 @@ write_candidates() {
     title="$(printf '%s' "$title" | apply_aliases "$c.aliases")"
     apply_aliases "$c.aliases" < "$c.body" > "$c.body.anon"
 
-    slug="$(printf '%s' "$title" | slugify)"
+    slug="$(printf '%s' "$title" | blog_slugify)"
     [ -n "$slug" ] || slug="untitled"
     # The arm rides in the filename as well as the folder: .provenance/ is flat
     # and shared, so two arms proposing the same slug on the same day would
@@ -1894,7 +1578,7 @@ curate_kind() {
       printf '\nid: %s\n'      "$(basename "$f" .md)"
       printf 'title: %s\n'     "$(fm_field "$f" title)"
       printf 'sources: %s\n'   "$(fm_sources "$f")"
-      printf 'excerpt: %s\n'   "$(post_body "$f" | tr '\n' ' ' | tr -s ' ' | head -c "$exlen")"
+      printf 'excerpt: %s\n'   "$(post_prose "$f" | tr '\n' ' ' | tr -s ' ' | head -c "$exlen")"
     done
     printf '\n===== END POOL =====\n'
     printf '\nKEEP COUNT: %s\n' "$cap"
@@ -1964,7 +1648,109 @@ cleanup() {
   [ -z "$LOCK_CREATED_DIR" ] || rmdir "$LOCK_CREATED_DIR" 2>/dev/null || true
 }
 
+# --- is this a timer slot, or did you type it? -----------------------------------
+# The retry-slot guard needs to know, and it used to be TOLD: the systemd unit
+# carried Environment=SUGGEST_SCHEDULED=1. Which made a safety rule depend on a
+# copy of a file in ~/.config/systemd/user/ staying in step with the template in
+# watcher/ — and on this machine it had not. The installed unit predated the
+# retry-slot design and carried no Environment line at all, so the stamp was
+# never consulted and the "only the first success of a calendar day does work"
+# rule simply was not running, however clearly the repo described it.
+#
+# It was benign only by luck, because the installed TIMER was equally old and
+# fired once at 03:00. The other pairing — new timer, old service — is six full
+# runs a day, base and every arm, sixty candidates a time.
+#
+# systemd exports INVOCATION_ID for every unit invocation and nothing else does
+# (verified: set inside `systemd-run --user`, unset in an interactive shell), so
+# the fact can be OBSERVED instead of declared, and no unit file has to
+# cooperate. An explicit SUGGEST_SCHEDULED still wins, because bin/ab.sh and the
+# arm fan-out both pass 0 to mean "not a slot — do the work".
+scheduled_run() {
+  if [ -n "${SUGGEST_SCHEDULED:-}" ]; then printf '%s' "$SUGGEST_SCHEDULED"; return 0; fi
+  if [ -n "${INVOCATION_ID:-}" ];     then printf 1; return 0; fi
+  printf 0
+}
+
+# --- what this run is for --------------------------------------------------------
+# ONE mode per invocation, parsed before any work happens and expanded into the
+# list of stages that mode performs. That list is the overview of this script:
+# what a given invocation will do, in order, in one place.
+#
+# It is parsed up front because it used not to be. Every flag was tested in the
+# MIDDLE of main(), after the stages written above it had already run, so:
+#
+#   --curate-only    whose whole purpose is replaying the cheap half instead of
+#                    paying to invent the candidates again, made one Sonnet call
+#                    per unproofread note and rewrote notes in the vault on its
+#                    way to the curator;
+#   --backfill-only  the same;
+#   --sweep-only     normalised and archived notes, though its own comment and
+#                    the README both call it "just the sweep";
+#   a MISTYPED flag  matched nothing, fell through every test and did a FULL
+#                    production run. `--curate-onlyy` was two Opus calls and
+#                    candidates written into the live pool, not an error message.
+MODE=full
+STAGES=""
+
+# The stage table. Each name is a step of main() below, and the only thing that
+# decides whether that step happens.
+#
+#   hygiene   .txt -> .md, and root notes older than ARCHIVE_DAYS into Archive/
+#   sweep     the anonymization backstop over every synced post
+#   typos     the one-shot proofread of typed notes (the one cheap mode that
+#             still costs model calls — it is what the mode is for)
+#   backfill  rebuild provenance reports for posts that have none
+#   generate  build the corpus, propose candidates, gate them, write them
+#   curate    judge the pool down to its caps
+#   reap      age out Discarded/ and Rejected/, drop orphaned reports
+#   arms      run every active arm's own downstream half
+#   finish    the day stamp, the stats snapshot, STATS.md
+set_stages() {
+  case "$MODE" in
+    full)     STAGES="hygiene sweep typos backfill generate curate reap arms finish" ;;
+    sweep)    STAGES="sweep" ;;
+    typos)    STAGES="typos" ;;
+    backfill) STAGES="backfill" ;;
+    curate)   STAGES="curate" ;;
+  esac
+}
+
+# Is <stage> part of this run?
+wants() { case " $STAGES " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --sweep-only)    MODE=sweep ;;
+      --typos-only)    MODE=typos ;;
+      --backfill-only) MODE=backfill ;;
+      --curate-only)   MODE=curate ;;
+      -h|--help)
+        printf 'usage: suggest.sh [--sweep-only|--typos-only|--backfill-only|--curate-only]\n\n'
+        printf '  (no flag)        the daily run, every stage:\n'
+        printf '                   hygiene sweep typos backfill generate curate reap arms finish\n'
+        printf '  --sweep-only     the anonymization backstop over every synced post, and nothing else\n'
+        printf '  --typos-only     the one-shot proofread of typed notes, and nothing else\n'
+        printf '  --backfill-only  rebuild missing provenance reports, and nothing else\n'
+        printf '  --curate-only    re-judge the pool down to its caps, and nothing else\n\n'
+        printf 'Only the daily run and --typos-only make model calls.\n'
+        exit 0 ;;
+      *)
+        printf 'suggest: unknown argument: %s\n' "$1" >&2
+        printf '         Refusing rather than guessing: an unrecognised flag used to fall\n' >&2
+        printf '         through into a full run, which costs Opus calls and writes posts\n' >&2
+        printf '         into the pool. Try: suggest.sh --help\n' >&2
+        exit 2 ;;
+    esac
+    shift
+  done
+  set_stages
+}
+
 main() {
+  parse_args "$@"
+
   # The one refusal in this script. GATE_MODE=report switches off the rule the
   # whole pipeline stands on — that a post is stitched from sentences the author
   # actually wrote — so it exists for measurement, inside a sandbox, and nowhere
@@ -1981,79 +1767,68 @@ main() {
     return 2
   fi
 
-  # An ARM run is a child of the base run (see the tail of this function): the
-  # parent already holds the lock, already normalised and archived the notes,
-  # already proofread them and swept the aliases. Those are facts about the
-  # CORPUS and must happen once a day, not once per arm. What an arm repeats is
-  # everything downstream of the corpus — generation, the gate, its own pool's
-  # curation — because that is the part under test.
+  # Two ways in. A BASE run owns the day: it takes the lock, honours the retry
+  # stamp, and does the stages that are facts about the CORPUS. An ARM run is the
+  # downstream half only — generation, the gate, its own pool's curation — because
+  # that is the part under test, and repeating the corpus stages per arm would
+  # mean each arm was reading a slightly different corpus.
   if [ "${ARM_RUN:-0}" != 1 ]; then
+    acquire_lock
 
-  acquire_lock
+    # Retry-slot guard: the timer fires several slots a day so a 03:00 failure
+    # (laptop off, no network) gets retried, but only the first SUCCESS of a
+    # calendar day does work — later slots are no-ops. A failed run writes no
+    # stamp, so the next slot picks it up. Manual runs ignore the stamp.
+    if [ "$(scheduled_run)" = 1 ] && [ -f "$STAMP" ] \
+       && [ "$(cat "$STAMP")" = "$(date +%Y-%m-%d)" ]; then
+      log "already completed today — retry slot skipped"
+      return 0
+    fi
 
-  # Retry-slot guard: the timer fires several slots a day so a 03:00 failure
-  # (laptop off, no network) gets retried, but only the first SUCCESS of a
-  # calendar day does work — later slots are no-ops. A failed run writes no
-  # stamp, so the next slot picks it up. Manual runs ignore the stamp.
-  if [ "${SUGGEST_SCHEDULED:-0}" = 1 ] && [ -f "$STAMP" ] \
-     && [ "$(cat "$STAMP")" = "$(date +%Y-%m-%d)" ]; then
-    log "already completed today — retry slot skipped"
-    return 0
-  fi
+    # A crashed run (SIGKILL, power loss) never fires the EXIT trap; sweep any
+    # scratch dir old enough that it can't belong to a live run.
+    find "$WORK" -maxdepth 1 \( -name 'sugg.*' -o -name '.repl.*' \) -mmin +1440 \
+      -exec rm -rf {} + 2>/dev/null || true
 
-  # A crashed run (SIGKILL, power loss) never fires the EXIT trap; sweep any
-  # scratch dir old enough that it can't belong to a live run.
-  find "$WORK" -maxdepth 1 \( -name 'sugg.*' -o -name '.repl.*' \) -mmin +1440 \
-    -exec rm -rf {} + 2>/dev/null || true
-
-  TMP="$(mktemp -d "$WORK/sugg.XXXXXX")"
-  trap cleanup EXIT
-
-  normalize_txt_notes
-  archive_notes
-  alias_sweep
-
-  if [ "${1:-}" = "--sweep-only" ]; then
-    log "sweep-only run done"
-    return 0
-  fi
-
-  # Before the corpus is read, so a typo is fixed once at the source rather than
-  # in every post stitched out of it.
-  typofix_notes
-
+    TMP="$(mktemp -d "$WORK/sugg.XXXXXX")"
+    trap cleanup EXIT
   else
+    # An ARM run is a child of the base run (see the arms stage at the tail of
+    # this function): the parent holds the lock and has already done every stage
+    # that is a fact about the CORPUS rather than about a pool.
+    #
+    # `bin/arm.sh run <name>` is the OTHER caller of this branch, and it has no
+    # parent — so it takes the lock itself. Without that a manual arm run could
+    # execute alongside the 03:00 timer, and the two would append to
+    # suggested.tsv and gate.tsv together, both extend the alias map (racing
+    # pick_reserve, so two people can be handed the same pseudonym) and both
+    # rewrite aliases.last through mktemp+mv, which is a lost update. Every other
+    # entry point in this repo is locked; this was the one that was not.
+    [ "${SUGGEST_LOCK_HELD:-0}" = 1 ] || acquire_lock
     TMP="$(mktemp -d "$WORK/sugg.XXXXXX")"
     trap cleanup EXIT
     log "arm run: ${BLOG_ARM} -> ${POOL#"$BLOG_ROOT"/}"
   fi
   local tmp="$TMP"
 
-  if [ "${1:-}" = "--typos-only" ]; then
-    log "typos-only run done"
-    return 0
-  fi
-
-  if [ "${1:-}" = "--backfill-only" ]; then
-    backfill_provenance
-    log "backfill-only run done"
-    return 0
-  fi
-
-  # Curation alone, over the pool as it stands. Generation is the expensive
-  # half; when a curation decision is lost — to a bad response, or to a bug in
-  # the validation that discards a good one — this replays just that call
-  # instead of paying to invent the candidates a second time.
-  if [ "${1:-}" = "--curate-only" ]; then
-    curate_kind long  "$MAX_LONG"  "$tmp"
-    curate_kind short "$MAX_SHORT" "$tmp"
-    log "curate-only run done"
-    return 0
+  # These three belong to the corpus, so an arm never repeats them: they happen
+  # once a day, in the base run, before any arm reads the notes.
+  if [ "${ARM_RUN:-0}" != 1 ]; then
+    if wants hygiene; then
+      normalize_txt_notes
+      archive_notes
+    fi
+    if wants sweep; then alias_sweep; fi
+    # Before the corpus is read, so a typo is fixed once at the source rather
+    # than in every post stitched out of it.
+    if wants typos; then typofix_notes; fi
   fi
 
   # Before build_corpus: build_claimed runs inside it and reads what this writes.
-  backfill_provenance
+  if wants backfill; then backfill_provenance; fi
 
+  local written=0 rejected=0 gen_failed=0
+  if wants generate; then
   build_corpus "$tmp/corpus.md"
   if [ "$NOTE_COUNT" -lt 2 ]; then
     log "corpus has $NOTE_COUNT note(s); need at least 2 to stitch anything — nothing to do"
@@ -2073,7 +1848,7 @@ main() {
   # over-budget sample rotates), so identical notes can still yield a stitching
   # yesterday's run couldn't see; the pool cap, HISTORY and the curator absorb
   # any churn. One Claude call a day is the price of serendipity.
-  local counts written=0 rejected=0 gen_failed=0
+  local counts
   local i out outs=() slots=()
   load_personas
   for ((i = 0; i < ${#PERSONA_NAMES[@]}; i++)); do
@@ -2113,9 +1888,14 @@ main() {
     fi
   fi
 
-  curate_kind long  "$MAX_LONG"  "$tmp"
-  curate_kind short "$MAX_SHORT" "$tmp"
+  fi   # wants generate
 
+  if wants curate; then
+    curate_kind long  "$MAX_LONG"  "$tmp"
+    curate_kind short "$MAX_SHORT" "$tmp"
+  fi
+
+  if wants reap; then
   # Age out the undo buffer and the kept rejects.
   find "$TRASH" -maxdepth 1 -type f -name '*.md' -mtime +"$TRASH_DAYS" -delete 2>/dev/null || true
   find "$REJECTED" -maxdepth 1 -type f -name '*.md' -mtime +"$REJECT_DAYS" -delete 2>/dev/null || true
@@ -2139,6 +1919,12 @@ main() {
       || rm -f "$pv"
   done
   shopt -u nullglob
+  fi   # wants reap
+
+  if ! wants generate; then
+    log "$MODE-only run done"
+    return 0
+  fi
 
   log "run done: $written new suggestion(s), $rejected gate-rejected"
   if [ "$written" -gt 0 ]; then
@@ -2164,13 +1950,14 @@ main() {
   #
   # A failing arm is logged and skipped. It is an experiment; the base's
   # suggestions must not depend on one.
-  if [ "${ARM_RUN:-0}" != 1 ]; then
+  if wants arms && [ "${ARM_RUN:-0}" != 1 ]; then
     local arm unset_args=() k
     for k in $BLOG_APPLIED_KEYS; do unset_args+=(-u "$k"); done
     while IFS= read -r arm; do
       [ -n "$arm" ] || continue
       log "--- arm $arm ---"
       env "${unset_args[@]}" ARM_RUN=1 BLOG_ARM="$arm" SUGGEST_SCHEDULED=0 \
+          SUGGEST_LOCK_HELD=1 \
           "$SCRIPT_DIR/suggest.sh" >/dev/null \
         || log "WARN arm $arm failed; the base run stands"
     done < <(blog_active_arms)
@@ -2183,6 +1970,7 @@ main() {
     log "run incomplete: generation failed — next timer slot will retry"
     return 1
   fi
+  wants finish || return 0
   date +%Y-%m-%d > "$STAMP"
 
   # Daily stats snapshot: one page per day in logs/stats/ (gitignored with the

@@ -200,7 +200,9 @@ install_scheduler_linux() {
   log "scheduler: systemd user timers enabled —"
   log "  blog-pipeline.timer  transcribe new recordings, every 15 min"
   log "  blog-suggest.timer   propose posts from your notes, daily at 03:00"
+  log "                       (later slots the same day only retry a failed run)"
   log "  check with: systemctl --user list-timers 'blog-*'"
+  log "  and with:   bash tests/check_units.sh   (installed units vs the repo)"
 }
 
 install_scheduler_macos() {
