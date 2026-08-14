@@ -55,39 +55,62 @@ exact words is a licence with a number attached to it.
   overrides it, and no number stated anywhere else outranks a number stated
   there.
 
-There are four ways a post's sentence can depart from a note's, and they are not
-equally free:
+### The corpus has two mouths, and they are not edited alike
 
-- **Trimming a sentence's ends** — always available, in any note. Drop a spoken
-  lead-in ("so anyway,"), a trailing "or something like that", a run-up that
-  only made sense where the sentence originally sat. Fix a pronoun that lost its
-  referent, adjust a tense so the seam meets. What is left is still his
-  sentence, and the checker sees it as such.
+Every note is introduced by `### NOTE id=<path>`, and the path says how the note
+was made:
+
+- **`drafts/…/cleaned.md` — DICTATED.** He spoke it out loud and a transcriber
+  wrote it down. Nobody chose these words on a page; they arrived at speaking
+  speed, wearing everything speech puts on a sentence.
+- **`sync/Obsidian/…` — TYPED.** He wrote it, with his thumbs or at a keyboard.
+  Every word is one he put there on purpose and could see while he did it.
+
+That difference decides how far you may go, because a typed note is a thought he
+composed and left standing, while a spoken one is a thought caught at speaking
+speed — and the sentence he happened to produce out loud is often not the
+sentence he would have written for the same idea. Restating a spoken sentence is
+not falsifying him. Restating a typed one is overruling a choice he made.
+
+There are four ways a post's sentence can depart from a note's:
+
+- **Trimming a sentence's ends** — available in any note, dictated or typed.
+  Drop a spoken lead-in ("so anyway,"), a trailing "or something like that", a
+  run-up that only made sense where the sentence originally sat. Fix a pronoun
+  that lost its referent, adjust a tense so the seam meets. What is left is still
+  his sentence, and the checker sees it as such. On a typed sentence, use this
+  where the seam genuinely needs it and nowhere else: if you find yourself
+  tidying a typed line that was already fine where it stood, stop. Its
+  clumsiness is often his clumsiness, and some of that is load-bearing.
 - **Glue** — a short connective between two of his sentences that genuinely
   cannot sit next to each other. Never a full sentence of your own argument.
   `THIS RUN'S LIMITS` bounds it twice: the most words one glue may run to, and
   the most of a post that may be glue at all.
 - **Cutting a hole in the middle of a sentence** — the false start he began,
-  abandoned, and started again inside one sentence. Available **only** when
-  `THIS RUN'S LIMITS` states a cut allowance, only in the notes it names there,
-  and only up to the number of words it gives.
-- **Rewording a sentence outright** — saying what one of his sentences said, in
-  words that are partly yours. Available **only** when `THIS RUN'S LIMITS`
-  states a reword allowance. That allowance names a floor: the share of the
-  wording of the **one** sentence you are restating that has to survive into
-  yours. The floor is the whole safety of the thing — it is what makes a reword
-  a restatement of something he actually said rather than an invention wearing
-  his voice. Every reworded sentence restates exactly one real sentence of his,
-  makes the same claim it made, and stays recognisably that line.
+  abandoned, and started again inside one sentence. Keep the second attempt.
+  **Dictated notes only**, up to the word count `THIS RUN'S LIMITS` gives for it.
+- **Rewording a dictated sentence outright** — saying what one spoken sentence
+  said, in fewer or better words. Reorder a sentence that arrived back to front
+  so the point leads. **Dictated notes only**, and the limits block names the
+  floor: the share of the wording of the **one** spoken sentence you are
+  restating that has to survive into yours. That floor is the whole safety of the
+  thing. Every reword restates exactly one sentence he really said, makes the
+  same claim it made, and stays recognisably that line — someone reading the note
+  and the post side by side should say "yes, that is that line, tightened". You
+  may not merge two spoken sentences into a new claim, extend his point past
+  where he took it, or add an example, a hedge or a conclusion he did not say.
+  What gets caught is drifting off the source, not rewording as such.
 
-Where the limits block says nothing about the last two, they are not available
-to you, and the job is the first two.
+The last two are the point of this run, so do not leave them unused out of habit
+— on dictated material, a sentence that arrives tangled is one you are being
+asked to untangle. But they are not a licence over his VOICE: reword to sharpen
+a spoken sentence, never to make it sound like a writer. If a dictated sentence
+already says the thing well, leave it exactly as spoken. The licence exists for
+the ones that do not, and a post whose every spoken line has been improved has
+been restyled.
 
-**Restraint is still the default where a licence exists.** These are ceilings the
-checker enforces, not targets to fill. A sentence that already reads well needs
-nothing done to it, and doing something anyway is how a pool stops sounding like
-him. The best posts need no glue, most need one or two, and a post that spends
-its whole allowance is usually telling you the convergence isn't real — skip it.
+Neither applies to a typed note. For those, the job is the first two, and a post
+built mostly from typed notes should read almost entirely as his words.
 
 ## What is worth proposing
 

@@ -157,12 +157,25 @@ base says.
 
 **Use it that way.** When an arm needs the base prompt to say something different,
 edit the sentence in its own copy. Do NOT leave the base's rule standing and add
-a directive that quotes it back and cancels it. `profiles/directives/voice-loose.md`
-is the example of what not to do: it spends its middle third un-saying
-`prompts/suggest.md` — quoting three rules and suspending them, including one
-under a heading called **Hard rules**, and informing the model that a factual
-claim made earlier in the same stream "is no longer true" — because the checker
-was changed underneath it.
+a directive that quotes it back and cancels it.
+
+All three live arms were built the wrong way and were converted to overlays on
+2026-08-14; the deleted directives are in git if you want to see it. The worst,
+`voice-loose.md`, spent its middle third un-saying `prompts/suggest.md` — quoting
+three rules and suspending them, and informing the model that a factual claim
+made earlier in the same stream "is no longer true" because the checker had been
+changed underneath it. Two symptoms worth recognising, because both are what a
+retraction rots into rather than accidents:
+
+- **It suspended a rule the prompt had stopped making.** It quoted "paraphrasing
+  … reads to the checker as writing" and lifted it. That sentence had already
+  been edited out of `prompts/suggest.md`. A retraction is pinned to wording it
+  does not own, so it goes stale silently — an overlay cannot, because it *is*
+  the wording.
+- **It wrote a gate threshold into prose, and lost.** It closed with "roughly
+  half of every post should still be his words untouched" while inheriting
+  `VERBATIM_MIN=70`, so `limits_block()` printed 30% in the same stream. See the
+  rule above about never stating a threshold in prose.
 
 Three reasons that is worse than editing the copy, in order of how much they cost:
 
@@ -178,6 +191,16 @@ Three reasons that is worse than editing the copy, in order of how much they cos
    and that is the whole question the arm existed to answer.
 3. **It hides in review.** A prompt overlay diffs against `prompts/` and shows
    exactly which sentence changed. A retraction reads as additive.
+4. **It costs the arm the base's directive.** There is ONE directive slot per
+   stage, and `profiles/base.env` already occupies both. An arm that sets
+   `CURATE_DIRECTIVE` does not add to `propose-generously.md`, it REPLACES it —
+   so the arm quietly differs from the base by that instruction too, on top of
+   whatever it meant to test. All three arms had this: `massive` and `middle`
+   simply lost it, and `voice-loose` carried it forward by pasting a copy into
+   its own file, which is the same rot one step later. An overlay leaves the slot
+   free, so the arm inherits the base's directive like any other run and its diff
+   is only what it meant to change. That is the fourth reason and in practice the
+   one that silently corrupts a comparison.
 
 So: a delta of degree (a knob, an emphasis, an extra instruction that does not
 contradict anything) is a **directive**. A delta that requires the base to stop

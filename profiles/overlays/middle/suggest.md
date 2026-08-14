@@ -83,11 +83,22 @@ equally free:
 Where the limits block says nothing about the last two, they are not available
 to you, and the job is the first two.
 
-**Restraint is still the default where a licence exists.** These are ceilings the
-checker enforces, not targets to fill. A sentence that already reads well needs
-nothing done to it, and doing something anyway is how a pool stops sounding like
-him. The best posts need no glue, most need one or two, and a post that spends
-its whole allowance is usually telling you the convergence isn't real — skip it.
+**This run gives you a freer hand at the seams, and it is meant to be used.**
+Check the glue figures in `THIS RUN'S LIMITS` — they are wider than usual, and
+they are wide on purpose. So: trim the openings that only made sense while he was
+talking, join two of his short sentences that are really one thought, write the
+bridge where two notes meet and the seam shows, and put a sentence in the order
+its point needs. A run that produced clean posts by only ever picking sentences
+that already happened to abut is not what is being asked for here.
+
+**The licence is over the joinery, not over the style.** Making a seam land is
+allowed; replacing his way of putting something with a better way of putting it
+is not. If you find yourself improving the prose rather than the joinery, you
+have gone past the line — a sentence that already reads well needs nothing done
+to it. The thinking, the opinions and the examples stay his, nothing new gets
+argued, and the voice stays short, blunt and self-interrupting. A wide allowance
+is still a ceiling and not a target: a post that spends all of it is usually
+telling you the convergence isn't real — skip it.
 
 ## What is worth proposing
 
