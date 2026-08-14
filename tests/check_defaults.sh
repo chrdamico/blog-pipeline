@@ -58,7 +58,6 @@ CLEANUP_MODEL=claude-sonnet-5
 CURATE_MODEL=claude-opus-5
 TYPO_MODEL=claude-sonnet-5
 CLAUDE_BIN=claude
-STRUCTURE=0
 SYNC_KEEP_DAYS=14
 MAX_LONG=4
 MAX_SHORT=8
@@ -103,7 +102,7 @@ for pair in "SYNC=$REPO/sync" "VAULT=$REPO/sync/Obsidian" "POSTS=$REPO/sync/Obsi
             "DRAFTS=$REPO/drafts" "WORK=$REPO/work" "LOGS=$REPO/logs" \
             "PROCESSED=$REPO/logs/processed.tsv" "USAGE_TSV=$REPO/logs/usage.tsv" \
             "ALIASES=$REPO/private/aliases.tsv" "CLEANUP_PROMPT=$REPO/prompts/cleanup.md" \
-            "SUGGEST_PROMPT=$REPO/prompts/suggest.md" "ANCHOR=$REPO/prompts/style-anchor.md"; do
+            "SUGGEST_PROMPT=$REPO/prompts/suggest.md"; do
   eq "path ${pair%%=*}" "${pair#*=}" "$(resolve "${pair%%=*}")"
 done
 

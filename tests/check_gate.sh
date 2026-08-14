@@ -368,5 +368,68 @@ else
   ok "a sandboxed run may still use report mode"
 fi
 
+# --- the model is told the numbers the gate enforces -------------------------
+# The gate's thresholds used to be prose constants in prompts/suggest.md, which
+# cannot follow a knob: the base ran at GLUE_MAX_WORDS=20 and massive at 40 while
+# the prompt went on saying 12, so an arm widened what the GATE accepted and told
+# the curator nothing. limits_block() in bin/suggest.sh prints them from the
+# resolved config instead. Two things to hold:
+#
+#   - the numbers are READ, not written — move a knob and the block moves;
+#   - the VOICE_* licences appear only when granted. That one is the pillar, not
+#     housekeeping: a base run must not read a sentence telling it that dictated
+#     sentences may be reworded, and the base keeps those knobs at 0.
+#
+# Called the same way the gate assertions above are: the knobs go in as real
+# environment, which outranks every profile, so this exercises the resolution
+# path a live arm uses rather than a hand-set variable.
+lim() {
+  env BLOG_BASE_ENV="$SB/no-base.env" \
+      VERBATIM_MIN="$1" GLUE_MAX_WORDS="$2" \
+      VOICE_TWEAK_GAP="$3" VOICE_REWRITE_MIN="$4" \
+      bash -c 'source "$0" >/dev/null 2>&1; limits_block "$1"' "$LIB" "$5"
+}
+
+blk="$(lim 70 20 0 0 60)"
+if printf '%s' "$blk" | grep -q 'GLUE MAX WORDS: 20' \
+   && printf '%s' "$blk" | grep -q 'GLUE MAX SHARE: 30%' \
+   && printf '%s' "$blk" | grep -q 'MAX NEW: 60'; then
+  ok "the limits block reads the resolved knobs (70/20 -> 30% share, 20 words)"
+else
+  bad "the limits block reads the resolved knobs" "$blk"
+fi
+
+blk="$(lim 20 40 0 0 12)"
+if printf '%s' "$blk" | grep -q 'GLUE MAX WORDS: 40' \
+   && printf '%s' "$blk" | grep -q 'GLUE MAX SHARE: 80%'; then
+  ok "an arm that moves the knob moves the number the model is given"
+else
+  bad "an arm that moves the knob moves the number the model is given" "$blk"
+fi
+
+blk="$(lim 70 20 0 0 60)"
+if printf '%s' "$blk" | grep -qi 'reword\|DICTATED'; then
+  bad "the rewrite licence does not leak into a run that was not granted it" "$blk"
+else
+  ok "the rewrite licence does not leak into a run that was not granted it"
+fi
+
+blk="$(lim 70 20 8 50 60)"
+if printf '%s' "$blk" | grep -q 'DICTATED CUT: .* 8 words' \
+   && printf '%s' "$blk" | grep -q 'DICTATED REWORD: .* 50%'; then
+  ok "an arm that grants a voice licence has it stated, in the gate's own numbers"
+else
+  bad "an arm that grants a voice licence has it stated" "$blk"
+fi
+
+# And the regression guard on the original bug: no gate threshold typed into the
+# prompt as a literal. A number there is invisible to every arm.
+if grep -nEi 'at most (a )?[0-9]+ words|[0-9]+ words at most|at most [0-9]+%' prompts/suggest.md; then
+  bad "prompts/suggest.md states a gate threshold as a literal" \
+      "it cannot follow a knob — say it in limits_block() instead"
+else
+  ok "prompts/suggest.md states no gate threshold as a literal"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

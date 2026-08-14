@@ -31,7 +31,7 @@
 # Test / backend-swap seams (env overrides, all optional):
 #   TRANSCRIBE    command run as "<cmd> <audio>" -> transcript on stdout
 #   CLAUDE_BIN    the claude CLI (default: claude)
-#   CLEANUP_MODEL model for the cleanup/structure calls (default: claude-sonnet-5;
+#   CLEANUP_MODEL model for the cleanup call (default: claude-sonnet-5;
 #                 CLAUDE_MODEL still overrides it, as it always did)
 #   NOTIFY        the notifier command (default: bin/notify.sh)
 #
@@ -170,8 +170,8 @@ process_one() {
     rm -rf "$tmp"
     return 1
   fi
-  # Kept before the optional structure call below overwrites them: what meta.json
-  # reports is the cost of the CLEANUP, which is the transform under study.
+  # What meta.json reports is the cost of the CLEANUP, which is the transform
+  # under study — read out of the call's own counters while they still hold it.
   local clean_in="$BLOG_LAST_IN_CHARS" clean_out="$BLOG_LAST_OUT_CHARS" clean_secs="$BLOG_LAST_SECONDS"
 
   # Safety net: the ⟦unsure⟧ confidence marks (see transcribe.sh) live in
@@ -180,18 +180,6 @@ process_one() {
   # compares against.
   sed -e 's/⟦unsure⟧//g' -e 's|⟦/unsure⟧||g' "$tmp/cleaned.md" > "$tmp/cleaned.stripped" \
     && mv "$tmp/cleaned.stripped" "$tmp/cleaned.md"
-
-  # 2b. optional structure suggestion — a SEPARATE artifact, never merged into
-  #     cleaned.md. Failure here is non-fatal: the draft is still valuable.
-  if [ "$STRUCTURE" = 1 ]; then
-    if claude_transform "$STRUCTURE_PROMPT" "$tmp/cleaned.md" "$tmp/structure.md" 2>>"$PROCESS_LOG" \
-       && [ -s "$tmp/structure.md" ]; then
-      log "structure suggestion written for $origname"
-    else
-      log "WARN structure step failed for $origname (continuing without it)"
-      rm -f "$tmp/structure.md"
-    fi
-  fi
 
   # 3. word-diff (exits 1 when files differ — that is the normal case)
   ( cd "$tmp" && git diff --word-diff --no-index -- verbatim.md cleaned.md ) \
@@ -210,7 +198,7 @@ process_one() {
   #    failure before this point still leaves the audio in sync/ for retry.
   mkdir -p "$dest"
   local a
-  for a in verbatim.md cleaned.md changes.diff structure.md; do
+  for a in verbatim.md cleaned.md changes.diff; do
     [ -f "$tmp/$a" ] && mv "$tmp/$a" "$dest/"
   done
   if ! cp "$audio" "$dest/$origname"; then

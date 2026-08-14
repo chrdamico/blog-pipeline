@@ -1208,6 +1208,58 @@ pool_inventory() {
   shopt -u nullglob
 }
 
+# --- this run's limits ------------------------------------------------------
+# The gate's thresholds, handed to the model in the same numbers the gate will
+# judge it by.
+#
+# They used to be prose constants in prompts/suggest.md — "a short connective, a
+# few words, at most 12" — and prose cannot follow a knob. GLUE_MAX_WORDS has
+# been 20 in the base since arm D was promoted, and arms/massive.env sets 40, so
+# the curator was being told 12 while the gate accepted twice or four times that.
+# Two costs, and the second is the expensive one: the base quietly under-spent
+# its own budget, and an arm whose entire point was a wider licence widened only
+# what the gate would ACCEPT and told the model nothing at all — half an
+# experiment, and the half that measures nothing. Printed from the resolved
+# config instead, so the number given and the number enforced cannot drift apart
+# again, and an arm that moves a knob moves both sides of it at once.
+#
+# Position is deliberate. This lands after the directive slot and immediately
+# before the corpus — the end of the instruction stream, which is the strongest
+# position in it (profiles/base.env carries the measurement that settled that).
+# It is therefore also the last word on any number stated earlier in the stream,
+# which is what prompts/suggest.md tells the model.
+#
+# NEW_SLACK_EVERY is deliberately NOT here. It is mercy in the verdict
+# arithmetic — one invented sentence tolerated per n sentences of post, so that
+# a long candidate is not killed by a single lapse — and reading it out would
+# turn a tolerance into a licence to write one sentence of prose per six.
+#
+# The VOICE_* lines appear only when their knobs are non-zero, which in the base
+# they are not: a run that has not been granted the rewrite licence must not read
+# a sentence about one, and this block stays byte-identical to the strict stream
+# there. It also means the next arm to set VOICE_REWRITE_MIN gets the model told
+# automatically, in the gate's own number, instead of needing a directive to
+# describe the knob in prose that can then disagree with it.
+#
+# $1 = this call's MAX NEW quota (per-persona, so not always MAX_NEW).
+limits_block() {
+  printf '\n\n===== THIS RUN'\''S LIMITS =====\n'
+  printf 'MAX NEW: %s — the most posts you may propose this run.\n' "$1"
+  printf 'GLUE MAX WORDS: %s — a connective longer than this is not glue; it is a sentence you wrote, and one of them fails the post outright.\n' \
+    "$GLUE_MAX_WORDS"
+  printf 'GLUE MAX SHARE: %s%% of a post'\''s sentences may be glue (at least one always may). Every other sentence must be findable in the corpus word for word.\n' \
+    "$((100 - VERBATIM_MIN))"
+  if [ "${VOICE_TWEAK_GAP:-0}" -gt 0 ]; then
+    printf 'DICTATED CUT: in a DICTATED note (id begins `drafts/`), up to %s words may be cut from the MIDDLE of one sentence — once per sentence. Typed notes (id begins `sync/`): none.\n' \
+      "$VOICE_TWEAK_GAP"
+  fi
+  if [ "${VOICE_REWRITE_MIN:-0}" -gt 0 ]; then
+    printf 'DICTATED REWORD: a sentence from a DICTATED note may be reworded outright, provided at least %s%% of the wording of the ONE spoken sentence it restates survives. Typed notes: none.\n' \
+      "$VOICE_REWRITE_MIN"
+  fi
+  printf '===== END LIMITS =====\n'
+}
+
 # --- generate ---------------------------------------------------------------
 # One generation call. With no personas configured there is exactly one, with
 # an empty name and CURATE_DIRECTIVE (usually empty too) in the directive slot —
@@ -1222,13 +1274,12 @@ generate() {
 
   {
     cat "$SUGGEST_PROMPT"
-    if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
-    # The directive slot: instructions + anchor + DIRECTIVE + input. A persona
+    # The directive slot: instructions + DIRECTIVE + input. A persona
     # is a directive ("choose and order as author X would"), not a prompt fork —
     # so every persona is still bound by the same stitching contract, and the
     # gate still measures all of them the same way.
     if [ -n "$directive" ] && [ -f "$directive" ]; then printf '\n\n'; cat "$directive"; fi
-    printf '\n\nMAX NEW: %s\n' "$quota"
+    limits_block "$quota"
 
     printf '\n===== BEGIN CORPUS =====\n'
     cat "$tmp/corpus.md"

@@ -55,7 +55,3 @@ Everything else in the mandate above still holds — no dropped clause, no dropp
 sentence, no dropped paragraph, no reordering, no restyling, no smoothing of the
 Denglisch. This directive licenses removing one class of contentless opener and
 nothing more.
-
-(This is an experiment: `changes.diff` and `churn_pct` in the bundle's
-`meta.json` say afterwards how much it actually moved, and the count of
-sentence-initial "I think" in `cleaned.md` says whether it worked at all.)

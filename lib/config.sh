@@ -19,7 +19,8 @@
 #      names an overlay directory searched first. A prompt experiment is then a
 #      directory holding only the file it changes.
 #
-#   3. PROFILES. BLOG_PROFILE=<name|file> names an env file under profiles/,
+#   3. PROFILES. BLOG_PROFILE=<name|file> names an env file under profiles/ (or
+#      profiles/offline/, where the ones that only run when named live),
 #      applied before the defaults, so a profile states only its deltas.
 #      profiles/default.env is the documented inventory of every knob.
 #      Precedence, highest first: the environment, the profile, the defaults —
@@ -67,13 +68,22 @@ BLOG_PROFILE_FILE=""
 # Keys any profile, arm or base.env has exported into this shell.
 BLOG_APPLIED_KEYS=""
 blog_resolve_profile() {
-  local p="$1"
+  local p="$1" c
   case "$p" in
-    /*)  printf '%s' "$p" ;;
-    */*) if [ -f "$p" ]; then printf '%s' "$p"; else printf '%s' "$BLOG_REPO_DIR/$p"; fi ;;
-    *)   if [ -f "$BLOG_REPO_DIR/profiles/$p" ]; then printf '%s' "$BLOG_REPO_DIR/profiles/$p"
-         else printf '%s' "$BLOG_REPO_DIR/profiles/$p.env"; fi ;;
+    /*)  printf '%s' "$p"; return ;;
+    */*) if [ -f "$p" ]; then printf '%s' "$p"; else printf '%s' "$BLOG_REPO_DIR/$p"; fi; return ;;
   esac
+  # A BARE NAME is searched for in profiles/ and then in profiles/offline/.
+  # The split is by lifecycle, not by mechanism: profiles/ holds what is live
+  # (base.env, and the inventory), profiles/offline/ holds the ones you only get
+  # by naming them — bin/ab.sh variants and one-off BLOG_PROFILE= runs. The
+  # search means an .exp still says `VARIANT_loose_PROFILE=cleanup-loose` and
+  # does not care which of the two directories the file sits in.
+  for c in "profiles/$p" "profiles/$p.env" "profiles/offline/$p" "profiles/offline/$p.env"; do
+    if [ -f "$BLOG_REPO_DIR/$c" ]; then printf '%s' "$BLOG_REPO_DIR/$c"; return; fi
+  done
+  # Nothing matched: name the live path, which is the one a typo usually meant.
+  printf '%s' "$BLOG_REPO_DIR/profiles/$p.env"
 }
 
 blog_apply_profile() {
@@ -215,15 +225,13 @@ blog_prompt() {
 }
 
 CLEANUP_PROMPT="${CLEANUP_PROMPT:-$(blog_prompt cleanup.md)}"
-STRUCTURE_PROMPT="${STRUCTURE_PROMPT:-$(blog_prompt structure.md)}"
 SUGGEST_PROMPT="${SUGGEST_PROMPT:-$(blog_prompt suggest.md)}"
 CURATE_PROMPT="${CURATE_PROMPT:-$(blog_prompt curate.md)}"
 TYPO_PROMPT="${TYPO_PROMPT:-$(blog_prompt typos.md)}"
 NAMES_PROMPT="${NAMES_PROMPT:-$(blog_prompt names.md)}"
-ANCHOR="${ANCHOR:-$(blog_prompt style-anchor.md)}"
 
 # --- directives ---------------------------------------------------------------
-# The third slot in every prompt assembly: instructions + anchor + DIRECTIVE +
+# The second slot in every prompt assembly: instructions + DIRECTIVE +
 # input. A directive is a small free-text file — one paragraph, usually — that
 # says something the shared prompt does not. A persona ("stitch as author X
 # would") is a directive, not a prompt fork. Empty by default, and an empty
@@ -274,7 +282,6 @@ CURATE_MODEL="$(blog_model "$BLOG_ENV_CURATE_MODEL"  "${CURATE_MODEL:-}"  claude
 TYPO_MODEL="${TYPO_MODEL:-claude-sonnet-5}"
 
 # --- knobs: process.sh ----------------------------------------------------------
-STRUCTURE="${STRUCTURE:-0}"
 SYNC_KEEP_DAYS="${SYNC_KEEP_DAYS:-14}"
 
 # --- knobs: transcribe.sh -------------------------------------------------------
@@ -400,7 +407,7 @@ blog_sha256_stdin() {
 # behaviour, the last must never be printed by a command that ends up in a log.
 BLOG_FINGERPRINT_KEYS="
 CLEANUP_MODEL CURATE_MODEL TYPO_MODEL
-STRUCTURE SYNC_KEEP_DAYS
+SYNC_KEEP_DAYS
 WHISPER_LANG WHISPER_MARKS WHISPER_CONF_LOW WHISPER_CONF_VLOW
 MAX_LONG MAX_SHORT MAX_NEW TRASH_DAYS CORPUS_MAX HISTORY_LINES ARCHIVE_DAYS
 VERBATIM_MIN GLUE_MAX_WORDS NEW_SLACK_EVERY GATE_MODE GATE_TRACE REJECT_DAYS
@@ -424,12 +431,10 @@ blog_config_dump() {
       printf '%s=%s\n' "$k" "${!k}"
     done
     printf 'prompt.cleanup=%s\n'   "$(blog_file_hash "$CLEANUP_PROMPT")"
-    printf 'prompt.structure=%s\n' "$(blog_file_hash "$STRUCTURE_PROMPT")"
     printf 'prompt.suggest=%s\n'   "$(blog_file_hash "$SUGGEST_PROMPT")"
     printf 'prompt.curate=%s\n'    "$(blog_file_hash "$CURATE_PROMPT")"
     printf 'prompt.typos=%s\n'     "$(blog_file_hash "$TYPO_PROMPT")"
     printf 'prompt.names=%s\n'     "$(blog_file_hash "$NAMES_PROMPT")"
-    printf 'prompt.anchor=%s\n'    "$(blog_file_hash "$ANCHOR")"
     printf 'directive.cleanup=%s\n' "$(blog_file_hash "$CLEANUP_DIRECTIVE")"
     printf 'directive.curate=%s\n'  "$(blog_file_hash "$CURATE_DIRECTIVE")"
     # Personas enter by name and by the content of what they instruct.
@@ -509,8 +514,8 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
       printf 'BLOG_ROOT=%s\n'     "$BLOG_ROOT"
       printf 'BLOG_ARM=%s\n' "${BLOG_ARM:-(base)}"
       for v in SYNC VAULT POSTS POOL ARCHIVE DRAFTS WORK LOGS PROMPTS PROMPTS_DIR ARMS_DIR \
-               CLEANUP_PROMPT STRUCTURE_PROMPT SUGGEST_PROMPT CURATE_PROMPT \
-               TYPO_PROMPT NAMES_PROMPT ANCHOR CLEANUP_DIRECTIVE CURATE_DIRECTIVE \
+               CLEANUP_PROMPT SUGGEST_PROMPT CURATE_PROMPT \
+               TYPO_PROMPT NAMES_PROMPT CLEANUP_DIRECTIVE CURATE_DIRECTIVE \
                PERSONAS ALIASES; do
         printf '%s=%s\n' "$v" "${!v}"
       done

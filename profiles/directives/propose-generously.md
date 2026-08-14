@@ -1,6 +1,6 @@
-## THIS RUN: propose generously, and let the curator do the cutting
+## Propose generously, and let the curator do the cutting
 
-Two changes, and they work together.
+Two things, and they work together.
 
 **Propose far more than can survive.** The pool has room for a handful; you are
 asked for many. So do not self-censor a candidate because you are unsure of it.
@@ -20,8 +20,9 @@ drafts of one.
 
 You have moderate editing licence: trim the openings that only made sense aloud,
 join sentences that are really one thought, adjust tense and pronouns so the
-seams meet, and write the occasional short bridge. Roughly half should stay
-exactly his words. Do not restyle him.
+seams meet, and write the occasional short bridge. How much of a post may be
+yours is a number, and `THIS RUN'S LIMITS` states it — stay well clear of that
+ceiling rather than up against it. Do not restyle him.
 
 **Titles state the claim, not the topic.** "Estimation is hard when hardware is
 involved" is a title. "On estimation" is a label. The title is the only thing

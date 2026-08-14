@@ -8,7 +8,7 @@
 #
 # Layers of defence:
 #   1. no file under a private path may be tracked (sync/ drafts/ logs/ work/
-#      private/ models/ vendor/, plus style-anchor.md and PLAN.md)
+#      private/ models/ vendor/, plus PLAN.md)
 #   2. no audio file may be tracked, anywhere in the tree
 #   3. .gitignore must still contain every guarding pattern — this catches the
 #      failure mode where the guard itself is weakened
@@ -26,7 +26,7 @@ err() { printf 'PRIVACY FAIL: %s\n' "$*" >&2; fail=1; }
 
 # 1. private paths must never be tracked
 bad=$(git ls-files -- 'sync/' 'drafts/' 'logs/' 'work/' 'private/' 'models/' \
-                      'vendor/' 'prompts/style-anchor.md' 'PLAN.md')
+                      'vendor/' 'PLAN.md')
 [ -z "$bad" ] || err "tracked file(s) in a private path:
 $bad"
 
@@ -44,7 +44,7 @@ $bad"
 
 # 3. the guard itself must stay intact
 for pat in 'sync/' 'drafts/' 'logs/' 'work/' 'private/' 'models/' 'eval/*' \
-           'prompts/style-anchor.md' 'PLAN.md' '*.wav' '*.m4a' '*.mp3' \
+           'PLAN.md' '*.wav' '*.m4a' '*.mp3' \
            '*.opus' '*.ogg' '*.flac'; do
   grep -qxF "$pat" .gitignore || err ".gitignore no longer contains '$pat'"
 done

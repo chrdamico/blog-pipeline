@@ -11,6 +11,3 @@ Still forbidden, as always: adding a thought that is not in the recording,
 removing one that is, smoothing the voice into standard prose, or tidying the
 Denglisch. The test is unchanged — he must recognise the sentence as his, only
 finished.
-
-(This is an experiment: `changes.diff` and the `churn_pct` in the bundle's
-`meta.json` are what say afterwards whether the extra licence was worth it.)

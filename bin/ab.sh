@@ -7,6 +7,7 @@
 #   ab.sh run <exp>              variant × fixture × repetition, each in a sandbox
 #   ab.sh report <exp>           eval/runs/<exp>/REPORT.md
 #   ab.sh judge <exp>            the optional, expensive, pairwise judge tier
+#                                (STAGE=suggest only — see the note above cmd_judge)
 #   ab.sh promote <exp> <var>    make a variant the baseline to compare against
 #   ab.sh score                  what the LIVE pool says (see the note below)
 #
@@ -622,10 +623,22 @@ side_by_side() {
 # pair judged twice with the positions swapped — a judge that prefers whichever
 # came first is a judge that measured nothing, and printing both votes makes
 # that visible instead of averaging it away.
+#
+# The CURATOR stage only, and that is a decision rather than a gap. A cleanup
+# experiment asks "how much more did this rewrite", which the pipeline already
+# answers for free and exactly: churn_pct in each bundle's meta.json, with
+# changes.diff as the literal before/after. The question underneath it — does the
+# cleaned text still sound like him — is the author's, off the recording he
+# remembers making, and he reads the transcripts when they come out wrong. A
+# model scoring one cleanup against another buys a softer answer to a question
+# already answered, at the price of a call. So there is no prompts/judge-process.md
+# and nothing here goes looking for one.
 cmd_judge() {
   [ "$#" -ge 1 ] || die "usage: ab.sh judge <experiment>"
   load_experiment "$1"
-  local dir="$RUNS/$EXP_NAME" prompt="$BLOG_REPO_DIR/prompts/judge-$EXP_STAGE.md"
+  local dir="$RUNS/$EXP_NAME" prompt="$BLOG_REPO_DIR/prompts/judge-suggest.md"
+  [ "$EXP_STAGE" = suggest ] \
+    || die "$EXP_NAME is a $EXP_STAGE experiment; the judge tier is curator-side only. Read churn and the word diffs in $dir/REPORT.md."
   [ -f "$prompt" ] || die "no judge prompt at $prompt"
   [ -d "$dir" ] || die "no runs yet for $EXP_NAME"
 
@@ -651,19 +664,15 @@ cmd_judge() {
     printf '| fixture | A=%s first | A=%s first (swapped) |\n|---|---|---|\n' "$a" "$b"
   } > "$out"
 
-  local fx list=""
-  if [ "$EXP_STAGE" = process ]; then
-    shopt -s nullglob
-    for fx in "$dir/$a"/*/; do list="${list:+$list }$(basename "${fx%/}")"; done
-    shopt -u nullglob
-  else
-    list=corpus
-  fi
+  # A curator run has one fixture by construction — the frozen corpus — so this
+  # loop runs once. It stays a loop because the shape of the table does not
+  # depend on that, and a second corpus would slot straight in.
+  local fx list=corpus
 
   for fx in $list; do
     local left right v1 v2
-    left="$(judge_material "$dir/$a/$fx/rep1/root" "$EXP_STAGE")"
-    right="$(judge_material "$dir/$b/$fx/rep1/root" "$EXP_STAGE")"
+    left="$(judge_material "$dir/$a/$fx/rep1/root")"
+    right="$(judge_material "$dir/$b/$fx/rep1/root")"
     [ -n "$left" ] && [ -n "$right" ] || continue
     v1="$(judge_pair "$prompt" "$judge_model" "$left" "$right" "$tmp/1")"
     v2="$(judge_pair "$prompt" "$judge_model" "$right" "$left" "$tmp/2")"
@@ -677,21 +686,18 @@ cmd_judge() {
   say "wrote $out"
 }
 
-# What the judge is shown for one run: the cleaned text, or the pool.
+# What the judge is shown for one run: the pool this variant produced, bodies
+# only. The frontmatter is stripped by starting at the title, because it carries
+# `variant:` and `persona:` — the blinding is this one sed, so mind it.
 judge_material() {
-  local root="$1" stage="$2" f
-  if [ "$stage" = process ]; then
-    f="$(find "$root/drafts" -name cleaned.md 2>/dev/null | head -1)"
-    [ -n "$f" ] && cat "$f"
-  else
-    shopt -s nullglob
-    for f in "$root/sync/Obsidian/Posts"/*.md; do
-      printf -- '--- post ---\n'
-      sed -n '/^# /,$p' "$f"
-      printf '\n'
-    done
-    shopt -u nullglob
-  fi
+  local root="$1" f
+  shopt -s nullglob
+  for f in "$root/sync/Obsidian/Posts"/*.md; do
+    printf -- '--- post ---\n'
+    sed -n '/^# /,$p' "$f"
+    printf '\n'
+  done
+  shopt -u nullglob
 }
 
 judge_pair() {

@@ -23,7 +23,6 @@ personal data stays in this gitignored tree.
 
 ```sh
 ./install.sh                 # deps (ffmpeg, whisper.cpp, model) + both timers
-# optional: copy prompts/style-anchor.example.md -> style-anchor.md and fill it in (SETUP.md §2)
 # drop an audio file into sync/  (or let Syncthing do it)
 bin/process.sh               # process now; the timer also runs it every 15 min
 bin/suggest.sh               # propose posts now; the timer also runs it daily
@@ -37,7 +36,6 @@ Each processed memo becomes `drafts/<recording-date>-<slug>/`:
 | `verbatim.md`   | raw whisper.cpp transcript — the sacred, re-diffable intermediate |
 | `cleaned.md`    | voice-preserving cleanup: filler gone, **nothing rephrased**      |
 | `changes.diff`  | word-level diff of verbatim → cleaned; every change made visible  |
-| `structure.md`  | optional outline suggestion (only when run with `STRUCTURE=1`)    |
 
 ## How it works
 
@@ -97,30 +95,28 @@ blog-pipeline/
 │   └── notify.sh      # notify-send / osascript wrapper
 ├── lib/
 │   └── config.sh      # every path, prompt, model and knob, resolved in one place
-├── arms/              # live A/B arms: one <name>.env of deltas each
+├── arms/              # the live A/B arms, and ONLY those: one <name>.env of
+│                      #   deltas each, deleted when the arm is promoted/retired
 ├── samples/notes/     # committed invented corpus for `arm.sh try` (reproducible)
-├── profiles/          # variants: one profile per experiment, plus
-│   ├── base.env       #   what the base has been promoted to (written by arm.sh)
+├── profiles/          # configuration, sorted by whether it is running:
+│   ├── base.env       #   LIVE: what the base has been promoted to (arm.sh writes)
 │   ├── default.env    #   the full inventory of knobs, at their defaults
-│   ├── directives/    #   the third prompt slot: what THIS run wants
-│   ├── personas/      #   name -> directive, for a multi-voice pool
-│   └── overlays/      #   prompt overlays (only the files they change)
+│   ├── directives/    #   LIVE: the second prompt slot, base's and each arm's
+│   ├── overlays/      #   LIVE: a running arm's own copy of a prompt file
+│   └── offline/       #   inert until named: one profile per offline experiment,
+│                      #     with the directives, overlays and personas it uses
 ├── prompts/
 │   ├── cleanup.md      # voice-preserving cleanup prompt
-│   ├── structure.md    # optional outline-suggestion prompt
 │   ├── suggest.md      # find convergences, write candidate posts
 │   ├── curate.md       # choose the best N-subset of an overflowing pool
 │   ├── names.md        # the name scout: list person names to anonymize
 │   ├── typos.md        # proofread a typed note: spelling only, nothing else
-│   ├── judge-*.md      # the optional pairwise judge tier (bin/ab.sh judge)
-│   └── style-anchor.example.md # template: copy to style-anchor.md (gitignored) + add your writing
+│   └── judge-suggest.md # the optional pairwise judge tier (bin/ab.sh judge)
 ├── eval/
 │   └── experiments/   # A/B definitions; the rest of eval/ is gitignored data
-├── tests/             # check_privacy.sh: nothing personal is ever committed
-│                      # check_typo_gate.sh: the typo pass only respells words
-│                      # check_defaults.sh: the config layer changes nothing
-│                      # check_gate.sh: the gate's experiment seams change no verdict
-│                      # check_provenance.sh: meta.json stays valid; reclean keeps identity
+├── tests/             # `bash tests/run_all.sh` — every check_*.sh, each printing
+│                      #   what it guards. None call a model; run the lot.
+│                      #   (this used to be a hand list here, and it drifted)
 ├── .githooks/         # pre-commit hook running that check (wired by install.sh)
 ├── watcher/           # systemd user units + (untested) macOS launchd plists
 ├── sync/              # THE Syncthing folder (the phone calls it /blog)
@@ -311,8 +307,8 @@ survives:
 
 - **`drafts/<bundle>/meta.json`** — the full record beside the artifacts it
   explains: run id, pipeline commit, config fingerprint and every resolved knob,
-  the model, each prompt by name *and* content hash (anchor and directive
-  included), the input by content hash (audio, verbatim), and what the transform
+  the model, each prompt by name *and* content hash (the directive included),
+  the input by content hash (audio, verbatim), and what the transform
   cost — chars in/out, wall clock, and **churn %**: the word-level edit distance
   from `verbatim.md` to `cleaned.md`, as a share of their combined length. That
   last number is how "did the looser cleanup prompt actually rewrite more?"
@@ -431,8 +427,15 @@ thing burned.
 
 `bin/ab.sh judge` adds an optional pairwise tier — blinded, judged twice with
 the positions swapped, on a pinned model that is never one of the models under
-test (`prompts/judge-*.md`). It is manual because it burns subscription and its
-answer is softer than it looks.
+test (`prompts/judge-suggest.md`). It is manual because it burns subscription and
+its answer is softer than it looks.
+
+It covers **curator** experiments only. A cleanup experiment asks how much more a
+looser prompt rewrote, and that is `churn_pct` with `changes.diff` beside it — a
+number and the literal before/after, computed for free. Whether the cleaned text
+still sounds like you is yours to say, off the recording you remember making, and
+you read the transcripts when they come out wrong. `ab.sh judge` on a
+`STAGE=process` experiment therefore stops and points you at `REPORT.md`.
 
 ### Online: what you actually kept
 
@@ -499,7 +502,7 @@ things no single script could:
   live `drafts/`, `processed.tsv`, or the phone.
 - **A prompt overlay.** `PROMPTS_DIR=<dir>` is searched before `prompts/`, so a
   prompt variant is a directory holding only the file it changes. Individual
-  prompts can also be pinned (`SUGGEST_PROMPT=…`, `CLEANUP_PROMPT=…`, `ANCHOR=…`).
+  prompts can also be pinned (`SUGGEST_PROMPT=…`, `CLEANUP_PROMPT=…`).
 - **Profiles.** `BLOG_PROFILE=<name>` applies `profiles/<name>.env` before the
   defaults, so a profile states only its deltas. `profiles/default.env` is the
   documented inventory of every knob there is. Precedence, highest first: the
@@ -519,7 +522,6 @@ identically to the live one. It is what provenance stamps on every artifact
 (see *Provenance*), and `tests/check_defaults.sh` asserts, value by value, that
 a profileless run still resolves to exactly the numbers below.
 
-- `STRUCTURE=1` — also emit a `structure.md` outline per bundle (extra Claude call).
 - `WHISPER_MODEL` / `WHISPER_LANG` / `WHISPER_THREADS` / `WHISPER_BIN` — tune STT
   (default language is `auto`, for the author's EN/DE/Denglisch mix).
 - `SYNC_KEEP_DAYS` (14) — days a processed recording and its transcript linger
@@ -544,7 +546,10 @@ a profileless run still resolves to exactly the numbers below.
   with a dated, titled name.
 - `VERBATIM_MIN` (85) / `GLUE_MAX_WORDS` (12) — the stitching gate: minimum
   share of verbatim sentences per candidate, and the longest a non-verbatim
-  (glue) sentence may be.
+  (glue) sentence may be. Both are also read out to the curator, at the end of
+  its prompt stream under `THIS RUN'S LIMITS`, so the number it is given and the
+  number it is judged by are the same one. Change the knob and the instruction
+  follows; the prompt files state no thresholds of their own.
 - `NEW_SLACK_EVERY` (25) — proportional mercy: one model-written sentence is
   tolerated per this many sentences of post, so a single slip can't sink a
   long post while shorts stay at zero.
@@ -597,8 +602,8 @@ a profileless run still resolves to exactly the numbers below.
 ### Variants (`profiles/`)
 
 A variant is a profile plus, optionally, a prompt overlay and a directive.
-Directives are the third slot in every prompt assembly — *instructions + style
-anchor + directive + input* — a small free-text file saying something this run
+Directives are the second slot in every prompt assembly — *instructions +
+directive + input* — a small free-text file saying something this run
 wants that the shared prompt does not (`CLEANUP_DIRECTIVE`, `CURATE_DIRECTIVE`).
 An empty directive changes the stream by not one byte, which is why the default
 run is unaffected.

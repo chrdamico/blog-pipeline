@@ -13,6 +13,3 @@ came from, and print the word-level diff, so the cost of this licence is
 measured rather than guessed. Do not use it to paraphrase: a sentence rebuilt
 out of your own vocabulary is invention, and it will read as invention in the
 report whatever the gate is set to.
-
-(This is an experiment, and it is the one that suspends the pipeline's central
-rule. It belongs in a sandbox with `GATE_MODE=report`, never in the live pool.)

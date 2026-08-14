@@ -39,8 +39,8 @@ BLOG_LAST_SECONDS=0
 # stdout. The exit status is the CLI's.
 #
 # in_chars is the size recorded in the ledger, and it is a parameter because the
-# cleanup stages deliberately report the sum of the PARTS (prompt + anchor +
-# directive + input) rather than the assembled stream: the markers are framing,
+# cleanup stages deliberately report the sum of the PARTS (prompt + directive +
+# input) rather than the assembled stream: the markers are framing,
 # not material, and meta.json has been reporting it that way since the first
 # bundle. Left empty it measures the stream, which is what the curator wants.
 blog_claude() {
@@ -78,8 +78,8 @@ blog_claude() {
 # transcript arrived" instead of transforming it. A single marked stream is
 # deterministic (verified against the transcripts that failed).
 #
-# The order is instructions + style anchor + DIRECTIVE + input, and the directive
-# sits LAST because position is what makes it work — see profiles/base.env for the
+# The order is instructions + DIRECTIVE + input, and the directive sits LAST
+# because position is what makes it work — see profiles/base.env for the
 # measurement that settled it.
 #
 # Leaves the parts' total size in BLOG_STREAM_CHARS, for blog_claude's in_chars.
@@ -88,7 +88,6 @@ blog_cleanup_stream() {
   local prompt_file="$1" in_file="$2" stream="$3"
   {
     cat "$prompt_file"
-    if [ -f "$ANCHOR" ]; then printf '\n\n'; cat "$ANCHOR"; fi
     if [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ]; then
       printf '\n\n'; cat "$CLEANUP_DIRECTIVE"
     fi
@@ -99,7 +98,6 @@ blog_cleanup_stream() {
 
   local n
   n=$(( $(wc -c < "$prompt_file") + $(wc -c < "$in_file") ))
-  [ -f "$ANCHOR" ] && n=$((n + $(wc -c < "$ANCHOR")))
   [ -n "$CLEANUP_DIRECTIVE" ] && [ -f "$CLEANUP_DIRECTIVE" ] \
     && n=$((n + $(wc -c < "$CLEANUP_DIRECTIVE")))
   BLOG_STREAM_CHARS="$n"

@@ -8,8 +8,6 @@ logs/
 work/
 # private/aliases.tsv: real-name -> alias map (see bin/suggest.sh, ALIASES)
 private/
-# your writing sample — copy prompts/style-anchor.example.md and fill it in
-prompts/style-anchor.md
 # local design/handoff notes, not part of the public repo
 PLAN.md
 PLAN-AB.md

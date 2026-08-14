@@ -56,7 +56,7 @@ page_flat="$(bin/brief.sh 2>/dev/null | tr -d ,)"
 silent=""
 for k in $(env -u BLOG_ARM bash -c '. lib/config.sh >/dev/null 2>&1; printf "%s\n" $BLOG_FINGERPRINT_KEYS'); do
   case "$k" in
-    STRUCTURE|GATE_TRACE|GATE_MODE|NAME_SCAN|TYPO_FIX|WHISPER_MARKS) continue ;;
+    GATE_TRACE|GATE_MODE|NAME_SCAN|TYPO_FIX|WHISPER_MARKS) continue ;;
     CLEANUP_MODEL|CURATE_MODEL|TYPO_MODEL|WHISPER_LANG) continue ;;
     VOICE_TWEAK_GAP|VOICE_REWRITE_MIN|VERBATIM_MIN) continue ;;
   esac

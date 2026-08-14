@@ -15,6 +15,9 @@
 #   arm.sh promote B                            B's deltas become the base
 #   arm.sh retire C                             C stops running; its pool is binned
 #
+# Either one ENDS the arm and deletes arms/<name>.env, so arms/ only ever holds
+# what is running. logs/arms.tsv keeps the row; git keeps the file.
+#
 # An arm is a named set of deltas (arms/<name>.env) plus a folder of its own
 # (sync/Obsidian/Posts/<name>/). The daily job runs the base first and then
 # every active arm against the SAME corpus, so what differs between the folders
@@ -75,6 +78,45 @@ clean_env_args() {
 
 arm_file() { printf '%s/%s.env' "$ARMS_DIR" "$1"; }
 arm_pool() { printf '%s/%s' "$POSTS" "$1"; }
+
+# --- what a config file points at ------------------------------------------------
+# Four knobs name a file or a directory of prose rather than a value: the two
+# directive slots, a prompt overlay, and a personas table. Retiring an arm has to
+# know which of those it introduced, so it can take them with it.
+arm_refs() {
+  local line k v
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      CLEANUP_DIRECTIVE|CURATE_DIRECTIVE|PROMPTS_DIR|PERSONAS|*_PROMPT) ;;
+      *) continue ;;
+    esac
+    # Values are written with $BLOG_REPO_DIR, which is the only variable they use.
+    printf '%s\n' "${v//\$BLOG_REPO_DIR/$BLOG_REPO_DIR}"
+  done < "$1"
+}
+
+# Does anything that is still live or still committed point at this path? The
+# search is over every config file the repo ships — base, profiles, remaining
+# arms, offline experiment definitions — using the repo-relative path, which is
+# the form all of them write.
+still_referenced() {
+  local rel="${1#$BLOG_REPO_DIR/}"
+  grep -rqsF -- "$rel" \
+    "$BASE_ENV" "$BLOG_REPO_DIR/profiles" "$ARMS_DIR" \
+    "$BLOG_REPO_DIR/eval/experiments" 2>/dev/null
+}
+
+# Is git holding this exact content? Nothing is deleted on the strength of
+# "probably committed": an arm can be created and retired between two commits,
+# and then the working copy is the only copy there has ever been.
+in_git() {
+  local rel="${1#$BLOG_REPO_DIR/}"
+  git -C "$BLOG_REPO_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 1
+  [ -n "$(git -C "$BLOG_REPO_DIR" ls-files -- "$rel" 2>/dev/null)" ] || return 1
+  git -C "$BLOG_REPO_DIR" diff --quiet HEAD -- "$rel" 2>/dev/null
+}
 
 valid_name() {
   case "$1" in
@@ -313,7 +355,17 @@ cmd_list() {
     [ -n "$name" ] || continue
     pool="$(arm_pool "$name")"
     n="$( { ls "$pool"/*.md 2>/dev/null || true; } | wc -l | tr -d ' ')"
-    deltas="$( { grep -vE '^[[:space:]]*(#|$)' "$(arm_file "$name")" 2>/dev/null || true; } | tr '\n' ' ')"
+    # A stopped arm has no file — promote and retire delete it. Say where its
+    # deltas went rather than printing an em dash that reads like "no deltas".
+    if [ -f "$(arm_file "$name")" ]; then
+      deltas="$( { grep -vE '^[[:space:]]*(#|$)' "$(arm_file "$name")" || true; } | tr '\n' ' ')"
+    else
+      case "$status" in
+        promoted) deltas="(in the base now — git log -- arms/$name.env)" ;;
+        retired)  deltas="(stopped and deleted — git log -- arms/$name.env)" ;;
+        *)        deltas="(marked $status but arms/$name.env is missing)" ;;
+      esac
+    fi
     printf '%-14s %-10s %-9s %-7s %s\n' "$name" "$created" "$status" "$n" "${deltas:-—}"
     [ -z "$note" ] || printf '%-14s %s\n' "" "  $note"
   done < "$ARMS_TSV"
@@ -323,9 +375,10 @@ cmd_status() { "$SCRIPT_DIR/score.sh" --arms "$@"; }
 
 # --- promote / retire -----------------------------------------------------------------
 # Promotion folds the arm's deltas into profiles/base.env, which lib/config.sh
-# applies as the floor under every run. The arm's own file is kept and its
-# registry row becomes `promoted`, because "what did we change the base to, and
-# why" is exactly the question a registry exists to answer.
+# applies as the floor under every run. The arm's own file is then DELETED: once
+# its deltas are the base, a second copy of them under arms/ is a file that
+# looks live and is not. The registry row becomes `promoted`, and git holds the
+# file itself for anyone who needs to read what the arm actually was.
 cmd_promote() {
   [ "$#" -ge 1 ] || die "usage: arm.sh promote <name>"
   local name="$1" f
@@ -364,15 +417,26 @@ cmd_promote() {
   shopt -u nullglob
   rmdir "$pool" 2>/dev/null || true
   reg_set "$name" promoted
+  rm -f "$f"
   say "base now carries $name's deltas ($BASE_ENV)"
   say "moved $moved post(s) into the base pool; arm stopped"
+  say "removed $f — the base is where those deltas live now (git remembers the arm)"
   say "the base fingerprint is now $(bash "$BLOG_LIB_DIR/config.sh" fingerprint)"
 }
 
+# Retiring deletes the arm's file for the same reason promoting does: a stopped
+# arm's .env sitting in arms/ is indistinguishable, by looking, from a running
+# one. The registry row (`retired`, with the note) is the durable answer to
+# "what did I try"; git is the durable answer to "what was in it".
+#
+# Any directive or overlay the arm introduced and nothing else uses goes with
+# it — but only if git already has that exact content, because otherwise the
+# only copy of a page of hand-written prose is the one we are about to delete.
 cmd_retire() {
   [ "$#" -ge 1 ] || die "usage: arm.sh retire <name>"
-  local name="$1"
-  [ -f "$(arm_file "$name")" ] || die "no such arm: $name"
+  local name="$1" f
+  f="$(arm_file "$name")"
+  [ -f "$f" ] || die "no such arm: $name"
   local pool p binned=0
   pool="$(arm_pool "$name")"
   shopt -s nullglob
@@ -380,8 +444,30 @@ cmd_retire() {
   shopt -u nullglob
   rmdir "$pool" 2>/dev/null || true
   reg_set "$name" retired
+
+  # Files this arm pointed at, before its own file stops being a reference.
+  local orphans=() ref
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    [ -e "$ref" ] || continue
+    orphans+=("$ref")
+  done < <(arm_refs "$f")
+
+  rm -f "$f"
   say "arm $name retired; $binned post(s) moved to Discarded/ (recoverable for $TRASH_DAYS days)"
-  say "its file is kept at $(arm_file "$name") — the registry remembers what you tried"
+  say "removed $f (git remembers the arm; logs/arms.tsv remembers the question)"
+
+  local o
+  for o in ${orphans[@]+"${orphans[@]}"}; do
+    if still_referenced "$o"; then
+      say "kept $o — something else still points at it"
+    elif in_git "$o"; then
+      rm -rf "$o"
+      say "removed $o — nothing points at it any more"
+    else
+      say "KEPT $o — nothing points at it, but git has no copy: commit or delete it yourself"
+    fi
+  done
 }
 
 usage() { sed -n '3,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }

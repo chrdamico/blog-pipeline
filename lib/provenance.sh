@@ -164,7 +164,6 @@ prov_write_meta() {
     printf '  %s,\n' "$(prov_kv model "$model")"
     printf '  "prompts": {\n'
     prov_prompt_json cleanup   "$CLEANUP_PROMPT";   printf ',\n'
-    prov_prompt_json anchor    "$ANCHOR";           printf ',\n'
     prov_prompt_json directive "$CLEANUP_DIRECTIVE"; printf '\n'
     printf '  },\n'
     printf '  "input": {\n'
@@ -215,7 +214,6 @@ prov_report_header() {
   printf '# commit: %s\n' "$(blog_git_commit)"
   printf '# model: %s\n' "$CURATE_MODEL"
   printf '# prompt.suggest: %s\n' "$(blog_file_hash "$SUGGEST_PROMPT")"
-  printf '# prompt.anchor: %s\n'  "$(blog_file_hash "$ANCHOR")"
   printf '# directive: %s\n'      "$(blog_file_hash "${CURATE_DIRECTIVE:-}")"
   printf '# gate: %s\n' "$GATE_MODE"
 }

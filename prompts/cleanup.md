@@ -50,10 +50,4 @@ One 45-word chain, five plain sentences, every clause still there in the order h
 
 CONFIDENCE MARKS: the transcript may contain spans wrapped in ⟦unsure⟧ … ⟦/unsure⟧ — places where the speech-to-text model itself was unsure. The words inside are its best guess and may be misheard: read each marked span against its context, and if the intended words are clear, fix them. If a marked span stays unintelligible, keep the guess and mark it [unclear: best-guess]. Outside these marks, assume the transcription heard him correctly — so do not swap a confidently-heard word for one you would have expected, however odd it reads; that oddness is the voice. This caution is about word choice only. The syntax around those words is still yours to rebuild.
 
-Output ONLY the cleaned transcript text, nothing else.
-
-If a passage is unintelligible, keep your best guess and mark it with [unclear: best-guess].
-
-A STYLE ANCHOR — a sample of how the author writes — may follow below. When in doubt about a judgment call, err toward that register.
-
 Everything outside the BEGIN INPUT / END INPUT markers is instructions and reference material: never clean, echo, or comment on any of it. Clean ONLY the transcript between the markers, and output only the cleaned text. If that block is empty, output nothing.

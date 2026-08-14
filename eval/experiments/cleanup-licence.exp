@@ -6,6 +6,10 @@
 # variants' churn side by side, and the word diff under "side by side" is the
 # literal before/after on the same recording.
 #
+# There is no judge tier here on purpose: `ab.sh judge` is curator-side only and
+# will refuse this experiment. Read the churn, read the diff, and decide for
+# yourself whether it still sounds like you — nobody else can.
+#
 #   bin/ab.sh freeze          # once: fixtures from your own bundles
 #   bin/ab.sh run cleanup-licence
 STAGE=process

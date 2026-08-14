@@ -1,6 +1,6 @@
 # blog-pipeline — setup
 
-One-time setup: install, add a style anchor, pair the phone, test. Everything
+One-time setup: install, pair the phone, test. Everything
 here is manual on purpose — the pipeline itself is automated, but pairing and
 personalisation are yours to do once.
 
@@ -43,20 +43,7 @@ systemctl --user start blog-suggest.service         # suggest right now
 Re-runs are safe (idempotent): already-processed audio is skipped by content
 hash, so an overlapping timer fire while a batch is running is a no-op.
 
-## 2. Style anchor (strongly recommended)
-
-Copy `prompts/style-anchor.example.md` to `prompts/style-anchor.md` and paste
-2–3 paragraphs of your own writing into it. The real file is **gitignored** —
-your writing sample stays on this machine. **Every** step reads that one file,
-so it is the only place you need it.
-
-For cleanup it is a nice-to-have — that step doesn't rephrase anything, so an
-empty anchor costs you little. For **post suggestions it is the whole ballgame**:
-generation writes new prose, and without a sample to anchor to it will read like
-generic LLM blogging. If you do one manual thing before enabling `blog-suggest`,
-do this one.
-
-## 3. Pair the phone (one folder for everything)
+## 2. Pair the phone (one folder for everything)
 
 Goal: **one** Syncthing folder — `/blog` on the phone, `sync/` here — carrying
 recordings, notes, and post suggestions alike. Its shape:
@@ -140,7 +127,7 @@ devices being online. The pipeline is E2E-encrypted phone↔laptop via Syncthing
 no third party sees the audio. Only cleaned/verbatim **text** leaves the machine,
 and only to Anthropic via `claude -p`.
 
-## 4. Text notes (the `Obsidian/` vault)
+## 3. Text notes (the `Obsidian/` vault)
 
 Voice memos land at the root of `sync/` and become drafts. Typed notes are a
 separate space with no pipeline attached: they live at the root of
@@ -162,7 +149,7 @@ as vault"** → pick **`/blog/Obsidian`** → start typing. Turn off *Settings �
 Files & Links → Use [[Wikilinks]]* if you want the files to stay plain markdown
 that any other editor reads identically.
 
-**Wire it up** — nothing to pair. §3 already shares the whole folder, so the
+**Wire it up** — nothing to pair. §2 already shares the whole folder, so the
 vault comes along with it. On the phone, point the editor at `/blog/Obsidian`;
 that is the entire step. Pick `Obsidian` as the vault root, **not** `/blog`
 itself: the vault must not contain the recordings.
@@ -201,7 +188,7 @@ each note into a new note in the phone app — or paste them on the laptop with
 anything long. Keep's own export (Google Takeout) gives you HTML/JSON rather
 than clean markdown, so for a handful of notes manual is genuinely less work.
 
-## 5. Post suggestions (`Posts/` → your phone)
+## 4. Post suggestions (`Posts/` → your phone)
 
 `bin/suggest.sh` reads the whole corpus (voice drafts + typed notes), finds where
 two or more notes converge, and writes candidates into `sync/Obsidian/Posts/`,
@@ -226,9 +213,6 @@ may clear, `Keep/` is the shelf, and moving a file is how you promote one to the
 other. Not deciding about a suggestion is a valid outcome; ignoring it *is* the
 rejection.
 
-**Before you enable it,** do §2 (the style anchor). Generation writes new prose,
-and an unanchored run reads like generic LLM blogging.
-
 **Running it**
 
 ```sh
@@ -248,7 +232,7 @@ Sensible first tuning: if the pool feels crowded, lower `MAX_LONG`/`MAX_SHORT`
 rather than `MAX_NEW` — a smaller cap means the curator has to make sharper
 choices, which is where the quality comes from.
 
-## 6. Test it (no phone needed)
+## 5. Test it (no phone needed)
 
 Synthesize a short memo with `espeak` and run the pipeline once:
 
@@ -279,14 +263,7 @@ lib/config.sh paths                        # where a given environment would go
 where they ship. Nothing under it can touch the live archive or the phone, which
 is what makes `bin/ab.sh` (README → *Experiments*) possible.
 
-Optional structure outline (a separate `structure.md`, never merged into the
-cleaned text):
-
-```sh
-STRUCTURE=1 bin/process.sh
-```
-
-## 7. Notifications from the timers
+## 6. Notifications from the timers
 
 `bin/notify.sh` uses `notify-send` (Linux) / `osascript` (macOS). When run from
 the systemd **user** timer, `notify-send` needs the session bus. Most desktops
@@ -306,7 +283,7 @@ journalctl --user -u blog-pipeline.service -n 50
 systemctl --user start blog-pipeline.service   # run once, now
 ```
 
-## 8. Benchmark
+## 7. Benchmark
 
 whisper.cpp, CPU-only, on a real 10-min memo (603 s of audio), measured 2026-07-29:
 
@@ -331,7 +308,7 @@ any older memo can be re-transcribed with the current settings at any time.
 these loops more and is weaker on German/Italian. To switch back per-run:
 `WHISPER_MODEL=models/ggml-large-v3-turbo-q5_0.bin bin/process.sh`.
 
-## 9. Migration to macOS (later)
+## 8. Migration to macOS (later)
 
 The design goal: **copy the folder, install, delete the old one.**
 
