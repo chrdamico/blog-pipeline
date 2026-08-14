@@ -1999,4 +1999,4 @@ main() {
   "$SCRIPT_DIR/brief.sh" --write >/dev/null 2>&1 || log "WARN brief refresh failed"
 }
 
-main "$@"
+:

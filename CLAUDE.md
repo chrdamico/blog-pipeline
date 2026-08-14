@@ -45,6 +45,20 @@ The rest are entry points over those: `bin/arm.sh` (live A/B arms), `bin/ab.sh`
 `bin/suggest.sh --help` prints its stage list, which is the shortest true answer
 to "what does a run actually do".
 
+**`bin/brief.sh` is the answer to "what is running tonight, and what does each arm
+change".** One page, generated from the same resolution every run uses, so it
+cannot describe a configuration that is not live: the base grouped by stage in
+plain English, then each active arm's deltas — including its directive, which for
+a curator arm is usually the whole difference. `--write` puts it in
+`sync/Obsidian/Pipeline/RUNNING.md`, where the phone can read it; the nightly run
+refreshes it. Read it before proposing an experiment.
+
+It lives in a SUBFOLDER of the vault on purpose: the corpus globs are
+non-recursive, so a page about the pipeline can never become material the
+pipeline stitches posts out of. `tests/check_brief.sh` asserts that end to end,
+and also that every fingerprint knob has a sentence — so a knob added tomorrow
+cannot go unexplained.
+
 Where things stand (2026-08-13). The base is `profiles/base.env`: arm **D**'s
 quotas (`MAX_NEW=60` proposed into `MAX_LONG=4` + `MAX_SHORT=8`, `VERBATIM_MIN=55`,
 `NEW_SLACK_EVERY=6`, `GLUE_MAX_WORDS=20`, `GATE_TRACE=1`) plus
