@@ -16,8 +16,16 @@
 #   TWEAKED   found after trimming up to 3 words off either end (a seam trim),
 #             or — with v_gap > 0 and only in a DICTATED note — after cutting one
 #             short hole out of the middle
+#   REWORDED  not found at all, but — with v_rewrite > 0 and only in a DICTATED
+#             note — near enough to one spoken sentence to be a restatement of
+#             it rather than an invention. The one class that is not his words.
 #   GLUE      not found, but short enough to be a connective the prompt allows
 #   NEW       not found and too long to be glue — the model wrote prose
+#
+# VERBATIM/TWEAKED/REWORDED all claim their source; GLUE and NEW claim nothing.
+# Only GLUE and NEW are capped by the verdict arithmetic — a REWORDED sentence
+# is bounded by its similarity floor instead, which is why that floor is the
+# whole safety argument for the class and belongs nowhere near the base.
 #
 # Two lines can appear indented under a classification line, and neither may
 # ever be mistaken for one (tests/check_gate.sh §4 asserts this, because
@@ -127,6 +135,37 @@ function voice_gap_source_of(s,   n, w, k, i, head, tail, id, g) {
     }
   }
   return ""
+}
+
+# --- the rewrite licence (v_rewrite / VOICE_REWRITE_MIN) ------------------------
+# The other half of treating the two mouths differently, and the one that bends
+# the pillar rather than clarifying it. v_gap above only lets a sentence be CUT;
+# this lets a dictated one be REWORDED, on the grounds that speech is first-draft
+# thinking and its sentences are frequently not the ones he would have written
+# for the same thought.
+#
+# The anchor is what keeps that from being a licence to invent. A rewrite is not
+# graded against "the corpus" in general: the gate finds the single DICTATED
+# sentence it is nearest to by word overlap and demands v_rewrite% of it, so the
+# sentence can only be a restatement of something he actually said, the report
+# names which sentence, and `= source` hands lib/claims.awk the original — so a
+# rewritten sentence spends its source exactly like a trimmed one does.
+#
+# Reached only after VERBATIM, TWEAKED and the gap licence have all failed, and
+# it returns immediately when v_rewrite is 0. So the base gate is untouched.
+function voice_rewrite_source_of(s,   i, sim, best, bi) {
+  if (v_rewrite <= 0) return ""
+  if (!indexed) { build_index(); indexed = 1 }
+  best = 0; bi = 0
+  for (i = 1; i <= nsent; i++) {
+    if (!is_voice(csrc[i])) continue
+    sim = similarity(s, csent[i])
+    if (sim > best) { best = sim; bi = i }
+  }
+  if (bi == 0 || best * 100 < v_rewrite) return ""
+  rewrite_sim = best * 100 + 0.5
+  src_text = csent[bi]
+  return csrc[bi]
 }
 
 # --- tracing: which corpus sentence is this one a rewrite OF? -------------------
@@ -246,6 +285,16 @@ END {
       tweaked++; excised++
       printf "- TWEAKED  [%s] %s\n", src, d
       say_source(src); annotate(s)
+    } else if ((src = voice_rewrite_source_of(s)) != "") {
+      # Its own class, not folded into TWEAKED: this one is genuinely reworded,
+      # and a report that called it a tweak would hide the single number anyone
+      # judging this licence needs. It still claims (lib/claims.awk reads
+      # REWRITTEN too) because `= source` names the spoken sentence it restates,
+      # and that sentence is spent whether or not the wording survived.
+      reworded++
+      printf "- REWORDED [%s] %s\n", src, d
+      printf "  ~ overlap   %d%% of the sentence it restates\n", rewrite_sim
+      say_source(src)
     } else if (split(s, wtmp, " ") <= glue_max) {
       glue++;     printf "- GLUE     %s\n", d; annotate(s)
     } else {
@@ -265,6 +314,10 @@ END {
   # that enforcement was off and what would have happened. logs/gate.tsv keeps
   # the whole line, so a report-mode run is still countable afterwards.
   note = excised ? sprintf("  [%d cut from the middle of a dictated sentence]", excised) : ""
+  # The rewrite count rides on the verdict line because it is the one number
+  # that says how far this run drifted from stitching. logs/gate.tsv keeps the
+  # line, so it stays countable per arm afterwards.
+  if (reworded) note = note sprintf("  [%d dictated sentence(s) reworded]", reworded)
   if (mode == "report") {
     note = note (pass ? "  [report mode: enforcement off]" \
                       : "  [report mode: enforcement off — would have FAILED]")

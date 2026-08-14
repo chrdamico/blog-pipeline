@@ -239,6 +239,103 @@ else
   bad "an excised sentence is claimable by build_claimed" "$rep"
 fi
 
+# --- 4c. the rewrite licence (VOICE_REWRITE_MIN) --------------------------------
+# The class that bends the pillar rather than clarifying it: a dictated sentence
+# may be genuinely REWORDED, anchored only by how much of its wording survives.
+# So the assertions are about the anchor holding — voice only, floor respected,
+# and the spoken sentence spent even though the post no longer quotes it.
+cat > "$SB/reworded.md" <<'EOF'
+I never actually finish the ones I start on the train.
+EOF
+cat > "$SB/reworded-typed.md" <<'EOF'
+I never actually finish the ones I begin on the bus.
+EOF
+cat > "$SB/rewrite-corpus.md" <<'EOF'
+
+### NOTE id=drafts/2026-08-13-spoken/cleaned.md
+
+So the thing is I never really finish any of the ones that I start on the train.
+
+### NOTE id=sync/Obsidian/typed.md
+
+So the thing is I never really finish any of the ones that I begin on the bus.
+EOF
+
+rw_gate() {
+  local body="$1"; shift
+  env -u BLOG_ARM BLOG_BASE_ENV="$SB/no-such-base.env" "$@" \
+      bash -c 'source "$0" >/dev/null 2>&1; verbatim_gate "$1" "$2"' \
+      "$LIB" "$body" "$SB/rewrite-corpus.md"
+}
+
+# Off by default: a reworded sentence is the model's prose and nothing else.
+rep="$(rw_gate "$SB/reworded.md")"
+case "$rep" in
+  *"- REWORDED"*) bad "no REWORDED class while the licence is off" "$rep" ;;
+  *)              ok "no REWORDED class while the licence is off" ;;
+esac
+
+# On, and it is his again — attributed to the bundle, with the overlap shown.
+rep="$(rw_gate "$SB/reworded.md" VOICE_REWRITE_MIN=40)"
+case "$rep" in
+  *"- REWORDED [drafts/2026-08-13-spoken/cleaned.md]"*)
+    ok "a reworded dictated sentence grades REWORDED" ;;
+  *) bad "a reworded dictated sentence grades REWORDED" "$rep" ;;
+esac
+case "$rep" in
+  *"dictated sentence(s) reworded]"*)
+    ok "the verdict line counts the rewordings" ;;
+  *) bad "the verdict line counts the rewordings" "$(printf '%s' "$rep" | tail -1)" ;;
+esac
+
+# The same rewrite of a TYPED sentence gets nothing, at any floor.
+rep="$(rw_gate "$SB/reworded-typed.md" VOICE_REWRITE_MIN=40)"
+case "$rep" in
+  *"- REWORDED"*) bad "the rewrite licence does not reach a typed note" "$rep" ;;
+  *)              ok "the rewrite licence does not reach a typed note" ;;
+esac
+# Drop the floor to where every sentence has SOME nearest match, and the
+# invariant that has to survive is not "nothing matches" — it is that whatever
+# matches is never a typed note. (Asserting no-match at floor 1 would assert
+# nothing: at that floor the typed rewrite matches the SPOKEN sentence, which is
+# the licence working, not leaking.)
+rep="$(rw_gate "$SB/reworded-typed.md" VOICE_REWRITE_MIN=1)"
+if printf '%s\n' "$rep" | grep -E '^- REWORDED ' | grep -q 'sync/Obsidian'; then
+  bad "no rewrite is ever attributed to a typed note" "$rep"
+else
+  ok "no rewrite is ever attributed to a typed note"
+fi
+
+# The floor is a floor: demand more overlap than the rewrite kept and it fails.
+rep="$(rw_gate "$SB/reworded.md" VOICE_REWRITE_MIN=95)"
+case "$rep" in
+  *"- REWORDED"*) bad "a rewrite below the floor is refused" "$rep" ;;
+  *)              ok "a rewrite below the floor is refused" ;;
+esac
+
+# The point of `= source`: the post no longer contains the spoken sentence, so
+# only this line can spend it. Without it a published thought stays free to be
+# published again by the next post.
+rep="$(rw_gate "$SB/reworded.md" VOICE_REWRITE_MIN=40)"
+if printf '%s\n' "$rep" | grep -qE '^  = source[[:space:]]+\[drafts/'; then
+  ok "a reworded sentence names the spoken sentence it spends"
+else
+  bad "a reworded sentence names the spoken sentence it spends" "$rep"
+fi
+claimed="$(printf '%s\n' "$rep" \
+  | awk -f lib/text.awk -f lib/claims.awk -v min=6 -v kind=long)"
+if printf '%s' "$claimed" | grep -q 'i never really finish'; then
+  ok "lib/claims.awk spends the source of a reworded sentence"
+else
+  bad "lib/claims.awk spends the source of a reworded sentence" "$claimed"
+fi
+# And the overlap annotation must not be readable as a classification line.
+if printf '%s\n' "$rep" | grep -E '^- (VERBATIM|TWEAKED|REWORDED) ' | grep -q 'overlap'; then
+  bad "the overlap line cannot be read as a classification line"
+else
+  ok "the overlap line cannot be read as a classification line"
+fi
+
 # --- 5. report mode cannot reach the live tree ----------------------------------
 # The knob that switches enforcement off is the one thing in this repo that can
 # put model prose into the pool wearing the author's voice. It is refused

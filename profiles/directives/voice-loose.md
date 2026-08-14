@@ -48,25 +48,50 @@ does not. If you find yourself tidying a typed sentence that was already fine
 where it stood, stop — that is the edit this run is trying to see less of. Its
 clumsiness is often his clumsiness, and some of that is load-bearing.
 
-**Dictated sentences: the same licence, used more freely — plus one more.**
-Speech carries scaffolding that only existed to buy thinking time, and removing
-it is closer to transcription than to editing. So trim these where it helps
-rather than only where it is needed, and additionally you may **cut a false
-start out of the middle**: the place he began the sentence, abandoned it, and
-started again. Keep the second attempt, drop the first and the "well, no, I
-mean" that joins them. That middle cut is the one edit available on dictation
-and on nothing else.
+**Dictated sentences: you may rewrite them.** Read this part carefully, because
+it SUSPENDS rules stated above and you will otherwise obey those instead.
 
-Keep any cut SHORT and in one piece. Removing a few words where he stumbled is
-the licence; removing a clause here and another there until two separate
-thoughts touch is not, and it will be caught.
+For dictated notes only, these no longer apply:
 
-What you may NOT do, in either mouth: change his words for better ones. A cut
-removes; it never substitutes. If what remains contains a word he did not say,
-you have rewritten him, and the gate will find it. And a dictated sentence that
-came out clean should be left exactly as spoken — the licence is for the
-scaffolding, not for your taste.
+- "the unit of work is the author's sentence, copied verbatim" — for dictation
+  the unit is the author's THOUGHT, and you may re-say it;
+- "seam trims only … a few words at the edge, nothing inside the sentence" —
+  inside the sentence is exactly where you may now work;
+- "paraphrasing … reads to the checker as writing" — **this is no longer true of
+  dictated material.** The checker has been changed for this run. It now finds
+  the spoken sentence your rewrite is nearest to and measures how much of it
+  survived, and a faithful restatement passes as his. You will not be rejected
+  for rewording a dictated sentence. Do not play safe out of habit: a run in
+  which you rewrote nothing is a failed run, not a cautious one.
 
-Roughly half of every post should still be untouched — and a post built mostly
-from typed notes should sit comfortably above that half, while one built mostly
-from dictation may sit at it. Do not restyle him.
+All of the above still binds in full for typed notes.
+
+Why the difference: a typed note is a thought he composed and left standing; a
+spoken one is a thought caught at speaking speed, and the sentence he happened
+to produce is usually not the sentence he would have written for the same idea.
+Restating it is not falsifying him. So on dictated material you may:
+
+- cut a false start out of the middle — the place he began, abandoned it, and
+  started again; keep the second attempt;
+- reorder a sentence that arrived back to front, so the point leads;
+- **reword it outright**, to say what he said in fewer or better words.
+
+The limit is the thought, not the wording. Every rewritten sentence must be a
+restatement of ONE spoken sentence that is really there, and it must still be
+recognisably that sentence — most of its content words survive, the claim it
+makes is unchanged, and someone reading the note and the post side by side would
+say "yes, that is that line, tightened". You may not merge two spoken sentences
+into a new claim, extend his point past where he took it, or add an example,
+a hedge or a conclusion he did not say. The gate finds the spoken sentence each
+rewrite is nearest to and measures how much survived; a rewrite that has drifted
+off its source is rejected as invention, and it is the drifting, not the
+rewriting, that gets caught.
+
+None of this is a licence over his VOICE. Reword to sharpen a spoken sentence,
+never to make it sound like a writer. If a dictated sentence already says the
+thing well, leave it exactly as spoken — the licence exists for the ones that do
+not, and a post whose every spoken line has been improved has been restyled.
+
+Roughly half of every post should still be his words untouched — and a post
+built mostly from typed notes should sit well above that half, while one built
+mostly from dictation may sit at it.

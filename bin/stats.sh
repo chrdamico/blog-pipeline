@@ -114,6 +114,13 @@ printf 'notes (archive): %s\n' "$(count "$VAULT/Archive")"
 # GLUE and NEW lines carry no source (they are the model's own words) and are
 # counted separately rather than being silently assigned to either mouth.
 #
+# REWORDED lines DO carry a source (always a dictated one — that licence reaches
+# no other mouth), so they count toward voice like any other sourced line, and
+# are also totalled on their own. That second number is the one to watch: it is
+# how much of the voice column is his wording versus his thought in the model's
+# wording, and without it a rising voice share could just be an arm rewriting
+# more.
+#
 # The number worth reading is not Keep/'s split on its own — it is Keep/'s split
 # NEXT TO Discarded/'s. Keep/ being mostly typed proves nothing if the corpus
 # offered mostly typed material that day; what says something is the same share
@@ -137,28 +144,30 @@ origin_split() {   # $1 = directory of posts; emits "voice typed glue posts nore
     {
       posts++
       while ((getline line < $0) > 0) {
-        if (line ~ /^- (VERBATIM|TWEAKED) \[/) {
+        if (line ~ /^- (VERBATIM|TWEAKED|REWORDED) \[/) {
           id = line; sub(/^[^[]*\[/, "", id); sub(/\].*/, "", id)
           if (is_voice(id)) v++; else t++
+          if (line ~ /^- REWORDED /) r++
         } else if (line ~ /^- (GLUE|NEW) /) g++
       }
       close($0)
     }
-    END { printf "%d %d %d %d %d\n", v+0, t+0, g+0, posts+0, noreport+0 }'
+    END { printf "%d %d %d %d %d %d\n", v+0, t+0, g+0, posts+0, noreport+0, r+0 }'
   shopt -u nullglob
 }
 
 # One line per pool, plus the share that makes the pools comparable.
 origin_row() {   # $1 = label  $2 = directory
-  local label="$1" v t g posts noreport tot
-  read -r v t g posts noreport < <(origin_split "$2")
+  local label="$1" v t g posts noreport r tot
+  read -r v t g posts noreport r < <(origin_split "$2")
   tot=$((v + t))
   if [ "$tot" -eq 0 ]; then
     printf '%-12s %3s posts  (no sourced sentences yet)\n' "$label" "$posts"
     return
   fi
-  printf '%-12s %3d posts  %5d sentences  voice %4d (%2d%%)  typed %4d (%2d%%)  glue/new %d%s\n' \
+  printf '%-12s %3d posts  %5d sentences  voice %4d (%2d%%)  typed %4d (%2d%%)  glue/new %d%s%s\n' \
     "$label" "$posts" "$tot" "$v" "$((v * 100 / tot))" "$t" "$((100 - v * 100 / tot))" "$g" \
+    "$([ "$r" -gt 0 ] && printf '  [%d of the voice reworded]' "$r")" \
     "$([ "$noreport" -gt 0 ] && printf '  [%d without a report]' "$noreport")"
   # Stashed for the verdict line below.
   printf '%s %s\n' "$v" "$tot" > "$ORIGIN_TMP/$label"

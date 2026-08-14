@@ -548,6 +548,17 @@ a profileless run still resolves to exactly the numbers below.
 - `NEW_SLACK_EVERY` (25) — proportional mercy: one model-written sentence is
   tolerated per this many sentences of post, so a single slip can't sink a
   long post while shorts stay at zero.
+- `VOICE_REWRITE_MIN` (0) — the strongest of the two-mouth knobs: a dictated
+  sentence may be genuinely **reworded**, not just cut, as long as this much of
+  its wording survives (word overlap, percent). The premise is that a typed note
+  is a composed thought while a spoken one is thinking at speaking speed, so the
+  sentence he produced is often not the sentence he would have written. The
+  floor is what keeps a rewrite anchored: the gate finds the single spoken
+  sentence it is nearest to and requires that much of it, so it can restate him
+  but not invent. Such sentences grade `REWORDED`, are named in the provenance
+  report with their source and overlap, and are counted on the gate line. This
+  is the only knob that puts non-verbatim prose in a live pool — leave it at
+  `0` outside an arm.
 - `VOICE_TWEAK_GAP` (0) — the one rule that differs between the corpus's two
   mouths. Cutting a sentence's *ends* is already free for every source (what
   remains is still a substring of the note, so it grades verbatim); this is how

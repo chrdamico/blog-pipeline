@@ -197,7 +197,7 @@ verbatim_gate() {
   awk -f "$BLOG_LIB_DIR/text.awk" -f "$BLOG_LIB_DIR/gate.awk" \
       -v min_pct="$VERBATIM_MIN" -v glue_max="$GLUE_MAX_WORDS" \
       -v new_every="$NEW_SLACK_EVERY" -v mode="$GATE_MODE" -v trace="$GATE_TRACE" \
-      -v v_gap="$VOICE_TWEAK_GAP" \
+      -v v_gap="$VOICE_TWEAK_GAP" -v v_rewrite="$VOICE_REWRITE_MIN" \
       "$2" "$1"
 }
 

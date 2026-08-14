@@ -24,18 +24,27 @@
 # rule is safe to move in (see bin/reclean.sh's header for why the other
 # direction corrupts the ledger).
 #
-# Only VERBATIM/TWEAKED lines and their `= source` companions are read. A GLUE or
-# NEW sentence is the model's and claims nothing; a `~ nearest` trace line is a
-# similarity GUESS and must never become a claim (tests/check_gate.sh §4).
+# Only VERBATIM/TWEAKED/REWORDED lines and their `= source` companions are read.
+# A GLUE or NEW sentence is the model's and claims nothing; a `~ nearest` trace
+# line is a similarity GUESS and must never become a claim (tests/check_gate.sh
+# §4).
+#
+# REWORDED (the VOICE_REWRITE_MIN licence) is in that list on purpose, and it is
+# the one case where the classification line's own text is nearly worthless as a
+# key — it is the MODEL's wording, so no future candidate will reproduce it and
+# no corpus hole can be punched for it. What earns its place here is the
+# `= source` line beside it, which carries the spoken sentence it restates. That
+# sentence has been spent: the post published that thought, in his voice, under
+# his name. Leaving it claimable would let the next post publish it again.
 
 function emit(t,   w) {
   t = blog_norm(t)
   if (t != "" && split(t, w, " ") >= min) printf "%s\t%s\n", kind, t
 }
 
-/^- (VERBATIM|TWEAKED) / {
+/^- (VERBATIM|TWEAKED|REWORDED) / {
   t = $0
-  sub(/^- (VERBATIM|TWEAKED)[[:space:]]+\[[^]]*\][[:space:]]*/, "", t)
+  sub(/^- (VERBATIM|TWEAKED|REWORDED)[[:space:]]+\[[^]]*\][[:space:]]*/, "", t)
   emit(t)
   next
 }

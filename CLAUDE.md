@@ -51,8 +51,11 @@ quotas (`MAX_NEW=60` proposed into `MAX_LONG=4` + `MAX_SHORT=8`, `VERBATIM_MIN=5
 `CURATE_DIRECTIVE=…/tournament.md`. Active arms: **massive**, **middle** —
 both curator-stage rewrite licences, differing in `VERBATIM_MIN` — and
 **voice-loose** (2026-08-14), the first arm to treat the corpus's two mouths
-differently: typed notes are to be used as written, dictated ones may lose a
-false start from the middle (`VOICE_TWEAK_GAP=8`). Promoted:
+differently. Typed notes may still be edited, just sparingly; dictated ones may
+be cut into (`VOICE_TWEAK_GAP=8`) and genuinely **reworded**
+(`VOICE_REWRITE_MIN=50`), on the premise that speech is first-draft thinking and
+the sentence he happened to say is often not the one he would have written.
+Promoted:
 **D**, **nofiller**. Retired: **mosaic** (2026-08-14). The base also pins
 `CLEANUP_DIRECTIVE=…/cleanup-nofiller.md`, from the `nofiller` arm: cleanup cuts
 the author's sentence-opening hedges ("I think" opened about one sentence in five
@@ -183,6 +186,14 @@ bin/ab.sh score               # ONLINE metric: what the live pool did per varian
   `suggest.sh` main() **refuses to start** in report mode when `BLOG_ROOT`
   equals the repo (pinned by check_gate.sh). Don't weaken that guard; a
   sandbox is one `BLOG_ROOT=` away, and `bin/ab.sh` sets it for you.
+- `VOICE_REWRITE_MIN` is the only knob that lets a NON-verbatim sentence into a
+  live pool, so treat it as the pillar bending rather than flexing. It is
+  narrower than report mode in three ways at once and all three are load-bearing:
+  it applies to DICTATED sentences only, each rewrite must clear a word-overlap
+  floor against the one spoken sentence it restates (so it can restate him but
+  not invent), and every rewrite is named in the report and counted on the gate
+  line. Keep it at 0 in the base. If an arm carrying it wins, the argument for
+  promoting it has to be made about the pillar, not about the accept rate.
 - An `.exp` variant may not set any `BLOG_*` or `ALIASES` (ab.sh rejects the
   whole prefix — those are the only handles that could point a sandboxed run
   at live data); use a profile instead. `VARIANT_x_ENV` is eval-split, so

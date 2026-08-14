@@ -321,6 +321,32 @@ NEW_SLACK_EVERY="${NEW_SLACK_EVERY:-25}"
 # hole of a few words is a restart, a hole of thirty is two unrelated thoughts
 # welded together and must still fail.
 VOICE_TWEAK_GAP="${VOICE_TWEAK_GAP:-0}"
+
+# How similar a REWRITTEN sentence must stay to the spoken sentence it came from
+# — word overlap as a percentage — for the gate to still count it as the
+# author's material rather than the model's prose. Dictated notes only. 0
+# disables it and is the shipped default.
+#
+# VOICE_TWEAK_GAP above only permits CUTS: what survives is still his words in
+# his order. This is the knob that permits genuine rewording, and it exists
+# because cutting is not actually the interesting difference between the two
+# mouths. A typed note was thought about — he composed it, saw it, and left it
+# as it stands. A spoken one is first-draft thinking at speaking speed, and its
+# sentences are often not the sentences he would have written for the same
+# thought. Restating one of those is not falsifying him; refusing to is what
+# keeps dictated material out of the pool.
+#
+# What stops this from becoming "the model may write whatever it likes about
+# him" is that a rewrite must still be ANCHORED: the gate finds the single
+# dictated sentence it is nearest to and requires that much word overlap, so the
+# sentence can only restate something he actually said, and the report names
+# which one. A floor around 50 permits a real rewrite while still demanding most
+# of the content words; below about 35 the anchor stops meaning anything and the
+# class becomes a licence to invent.
+#
+# The pillar this bends is the one the whole pipeline stands on, so it bends for
+# ONE mouth, under a floor, counted on every gate line, and never in the base.
+VOICE_REWRITE_MIN="${VOICE_REWRITE_MIN:-0}"
 REJECT_DAYS="${REJECT_DAYS:-30}"
 REUSE_MIN_WORDS="${REUSE_MIN_WORDS:-6}"
 REUSE_DROP_PCT="${REUSE_DROP_PCT:-75}"
@@ -378,7 +404,7 @@ STRUCTURE SYNC_KEEP_DAYS
 WHISPER_LANG WHISPER_MARKS WHISPER_CONF_LOW WHISPER_CONF_VLOW
 MAX_LONG MAX_SHORT MAX_NEW TRASH_DAYS CORPUS_MAX HISTORY_LINES ARCHIVE_DAYS
 VERBATIM_MIN GLUE_MAX_WORDS NEW_SLACK_EVERY GATE_MODE GATE_TRACE REJECT_DAYS
-VOICE_TWEAK_GAP
+VOICE_TWEAK_GAP VOICE_REWRITE_MIN
 REUSE_MIN_WORDS REUSE_DROP_PCT
 TYPO_FIX TYPO_MIN_LEN TYPO_MAX_PCT
 NAME_SCAN
